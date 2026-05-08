@@ -108,11 +108,41 @@ New metrics scraped on the existing `/metrics` listener
 | `realtime_connections_total`        | Counter   | —             |
 | `realtime_emits_total`              | Counter   | `channel`     |
 | `realtime_subscriptions_total`      | Counter   | `room_type`, `outcome` |
+| `realtime_handshake_rejected_total` | Counter   | `reason`      |
 
 Verification:
 ```bash
 curl -s http://127.0.0.1:9201/metrics | grep -E '^(aggregator|realtime)_'
 ```
+
+## Realtime handshake throttle (R-12.3.1-6)
+
+Per-IP rate-limit on the Socket.IO handshake hot path. Defends the JWT
+HMAC-verify against bogus-token connection floods. The cap is a sliding
+window in Redis; rejections happen BEFORE `jwt.verifyAsync`, so an attacker
+can't burn CPU by holding many invalid sockets open.
+
+Defaults: **20 connect attempts / 60s rolling window per IP**. Override at
+process start via:
+
+```bash
+REALTIME_HANDSHAKE_RATE_LIMIT_COUNT=40
+REALTIME_HANDSHAKE_RATE_LIMIT_WINDOW_SEC=60
+```
+
+Tuning guidance:
+- A legitimate UI client opens ~1 socket per tab; Socket.IO reconnect backs
+  off to 5s, so even a flapping link stays well below 20/min. If you see
+  sustained `realtime_handshake_rejected_total{reason="rate_limit"}` on a
+  legitimate origin, raise `_COUNT` rather than disabling the throttle.
+- A `redis_error` rate above zero means the Redis client driving the
+  counter is unhealthy — connections are still admitted (fail-open), but
+  the throttle is effectively disabled while the error rate is high. Page
+  the Redis owner.
+
+Monitor: `realtime_handshake_rejected_total` rate. The Alertmanager rule
+below fires on sustained rejections (production = real attack, dev = a
+local script gone wrong).
 
 ## Alert rules (Prometheus)
 
@@ -161,6 +191,35 @@ groups:
           team: ops
         annotations:
           summary: "aggregator RPC failures sustained"
+
+  - name: areal_realtime
+    rules:
+      - alert: RealtimeHandshakeRejectionsSustained
+        # Sustained per-IP throttle rejections. Above ~0.5 rejects/sec on
+        # a public-facing edge usually means either a misbehaving client
+        # (Socket.IO reconnect storm) or an actual connect-flood attempt.
+        # Investigate via the gateway logs (`handshake rejected: ip=...`).
+        expr: sum(rate(realtime_handshake_rejected_total{reason="rate_limit"}[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "realtime handshake rejections sustained > 0.5/s"
+          description: "Per-IP throttle is rejecting handshakes for >10m. Inspect logs for offending IPs."
+
+      - alert: RealtimeHandshakeThrottleRedisError
+        # Counter for the fail-open path: Redis is unreachable so the
+        # throttle is silently bypassed. Connections still flow but the
+        # anti-DoS gate is effectively off — page the Redis owner.
+        expr: sum(rate(realtime_handshake_rejected_total{reason="redis_error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "handshake-throttle Redis errors sustained"
+          description: "Throttle is failing open. Anti-DoS gate effectively disabled."
 ```
 
 ## Operational checklist

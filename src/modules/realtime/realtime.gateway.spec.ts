@@ -2,6 +2,7 @@ import { JwtService } from '@nestjs/jwt';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MetricsService } from '../metrics/metrics.service.js';
+import type { HandshakeThrottleService } from './handshake-throttle.js';
 import { RealtimeGateway, REALTIME_ALLOWED_ORIGINS } from './realtime.gateway.js';
 
 /**
@@ -31,6 +32,7 @@ function makeSocket(
     authHeader?: string;
     authToken?: string;
     walletData?: string | null;
+    address?: string;
   } = {},
 ) {
   const headers: Record<string, string> = {};
@@ -39,15 +41,28 @@ function makeSocket(
     handshake: {
       headers,
       auth: opts.authToken ? { token: opts.authToken } : {},
+      address: opts.address ?? '127.0.0.1',
     },
     data: opts.walletData !== undefined ? { wallet: opts.walletData } : {},
     join: vi.fn(),
     leave: vi.fn(),
+    disconnect: vi.fn(),
   };
 }
 
-function makeGateway(jwt: JwtService = makeJwt()): RealtimeGateway {
-  return new RealtimeGateway(jwt, SHARED_METRICS);
+function makeThrottle(
+  outcome: { ok: true } | { ok: false; retryAfterSec: number } = { ok: true },
+): HandshakeThrottleService {
+  return {
+    checkAndRecord: vi.fn().mockResolvedValue(outcome),
+  } as unknown as HandshakeThrottleService;
+}
+
+function makeGateway(
+  jwt: JwtService = makeJwt(),
+  throttle: HandshakeThrottleService = makeThrottle(),
+): RealtimeGateway {
+  return new RealtimeGateway(jwt, SHARED_METRICS, throttle);
 }
 
 describe('RealtimeGateway', () => {
@@ -66,6 +81,36 @@ describe('RealtimeGateway', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await gateway.handleConnection(sock as any);
       expect(sock.data.wallet).toBeNull();
+    });
+
+    it('disconnects + skips JWT verify when the per-IP throttle rejects', async () => {
+      const jwt = makeJwt({ sub: VALID_WALLET });
+      const throttle = makeThrottle({ ok: false, retryAfterSec: 7 });
+      const gateway = makeGateway(jwt, throttle);
+      const sock = makeSocket({ authHeader: 'Bearer good-token', address: '203.0.113.5' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await gateway.handleConnection(sock as any);
+      expect(sock.disconnect).toHaveBeenCalledWith(true);
+      // Critical: the JWT verify must NOT have been called — this is the
+      // whole point of the throttle (deflect bogus-token connect floods
+      // before they burn HMAC CPU).
+      expect(jwt.verifyAsync).not.toHaveBeenCalled();
+    });
+
+    it('fails open on throttle errors (admit the connection, log a warning)', async () => {
+      const jwt = makeJwt({ sub: VALID_WALLET });
+      const throttle = {
+        checkAndRecord: vi.fn().mockRejectedValue(new Error('redis down')),
+      } as unknown as HandshakeThrottleService;
+      const gateway = makeGateway(jwt, throttle);
+      const sock = makeSocket({ authHeader: 'Bearer good-token' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await gateway.handleConnection(sock as any);
+      // Connection NOT disconnected — fail-open per the gateway contract.
+      expect(sock.disconnect).not.toHaveBeenCalled();
+      // JWT verify still runs and the wallet is attached normally.
+      expect(jwt.verifyAsync).toHaveBeenCalled();
+      expect(sock.data.wallet).toBe(VALID_WALLET);
     });
   });
 

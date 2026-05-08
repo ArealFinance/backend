@@ -134,6 +134,24 @@ export class MetricsService implements OnModuleInit {
   });
 
   /**
+   * Handshake rejections by reason (Phase 12.3.1 follow-up R-12.3.1-6).
+   *
+   * `rate_limit` — IP exceeded the configured per-window cap and was
+   * disconnected before the JWT verify hot path. A sustained non-zero
+   * rate flags either a misbehaving client (Socket.IO reconnect storm
+   * after a server bug) or an actual connection-flood attempt.
+   *
+   * `redis_error` — the throttle counter couldn't be read/written. We
+   * still admit the connection (fail-open) but record the miss so ops
+   * sees Redis hiccups even when the user-facing surface stays green.
+   */
+  readonly realtimeHandshakeRejected = new Counter({
+    name: 'realtime_handshake_rejected_total',
+    help: 'Socket.IO handshakes rejected before JWT verify',
+    labelNames: ['reason'] as const,
+  });
+
+  /**
    * Guards against double-init when the same instance is wired into both the
    * main Nest app and the secondary MetricsAppModule (Phase 12.1 split-listener
    * pattern). Both DI contexts call `onModuleInit` on the shared instance;
@@ -158,5 +176,6 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.realtimeConnections);
     this.registry.registerMetric(this.realtimeEmits);
     this.registry.registerMetric(this.realtimeSubscriptions);
+    this.registry.registerMetric(this.realtimeHandshakeRejected);
   }
 }

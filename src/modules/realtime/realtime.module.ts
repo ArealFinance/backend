@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module.js';
+import { HandshakeThrottleService } from './handshake-throttle.js';
 import { RealtimeGateway } from './realtime.gateway.js';
 import { RealtimeService } from './realtime.service.js';
 
@@ -18,10 +19,13 @@ import { RealtimeService } from './realtime.service.js';
  * The gateway is provided here but not exported — only the emit facade
  * leaves the module boundary, which keeps the `server` instance an
  * implementation detail.
+ *
+ * `HandshakeThrottleService` is exported in case other gateways ever need
+ * the same per-IP cap; today only `RealtimeGateway` consumes it.
  */
 @Module({
   imports: [AuthModule],
-  providers: [RealtimeGateway, RealtimeService],
-  exports: [RealtimeService],
+  providers: [RealtimeGateway, RealtimeService, HandshakeThrottleService],
+  exports: [RealtimeService, HandshakeThrottleService],
 })
 export class RealtimeModule {}
