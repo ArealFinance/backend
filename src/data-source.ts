@@ -30,6 +30,7 @@ import { TightenRefreshTokenHash1714953600000 } from './migrations/0003-tighten-
 import { ProjectionTables1715040000000 } from './migrations/0004-projection-tables.js';
 import { MarketsAggregates1715140000000 } from './migrations/0005-markets-aggregates.js';
 import { PoolSnapshotPrices1715140000001 } from './migrations/0006-pool-snapshot-prices.js';
+import { RenameDistributorCount1715140000002 } from './migrations/0007-rename-distributor-count.js';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -58,6 +59,7 @@ export default new DataSource({
     ProjectionTables1715040000000,
     MarketsAggregates1715140000000,
     PoolSnapshotPrices1715140000001,
+    RenameDistributorCount1715140000002,
   ],
   migrationsTableName: 'typeorm_migrations',
 });
