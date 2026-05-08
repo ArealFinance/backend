@@ -12,7 +12,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
-import { LessThan, Repository } from 'typeorm';
+import { IsNull, LessThan, Repository } from 'typeorm';
 
 import { RefreshToken } from '../../entities/refresh-token.entity.js';
 import { User } from '../../entities/user.entity.js';
@@ -82,16 +82,51 @@ export class AuthService {
 
   async refresh(presentedToken: string): Promise<AuthResponseDto> {
     const hash = this.hashToken(presentedToken);
-    const row = await this.refreshTokens.findOne({ where: { tokenHash: hash } });
-    if (!row || row.revokedAt !== null || row.expiresAt.getTime() < Date.now()) {
+
+    // Atomic compare-and-set: revoke iff the row exists AND is not yet
+    // revoked. Two concurrent calls with the same raw token produce one
+    // `affected: 1` (winner) and one `affected: 0` (loser) — there is no
+    // window between the read and the write where both branches see the
+    // pre-revoked row, which the previous find-then-save did expose.
+    const updated = await this.refreshTokens.update(
+      { tokenHash: hash, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+
+    if (updated.affected !== 1) {
+      // Two interesting reasons we'd land here:
+      //   1. the hash doesn't match any row (bogus / expired-and-cleaned token),
+      //   2. the row exists but is already revoked → REUSE attack (legitimate
+      //      client never replays a revoked token; this is bot or theft).
+      // For (2) we revoke every still-live token belonging to the same wallet
+      // (refresh-token family revoke) so any pair the attacker minted by being
+      // faster than the victim is invalidated on next use.
+      const reused = await this.refreshTokens.findOne({ where: { tokenHash: hash } });
+      if (reused) {
+        await this.refreshTokens.update(
+          { wallet: reused.wallet, revokedAt: IsNull() },
+          { revokedAt: new Date() },
+        );
+        this.logger.warn(
+          `refresh-token REUSE detected for ${reused.wallet} — entire family revoked`,
+        );
+      }
       throw new UnauthorizedException('refresh token invalid, expired, or revoked');
     }
 
-    // Rotation — revoke the presented token before minting new ones so a
-    // double-spend attempt (race: same token submitted twice) loses on the
-    // second attempt at the unique constraint / revoked check.
-    row.revokedAt = new Date();
-    await this.refreshTokens.save(row);
+    // Re-read so we know which wallet to mint tokens for. (The UPDATE above
+    // doesn't return the row in a portable way across drivers.)
+    const row = await this.refreshTokens.findOne({ where: { tokenHash: hash } });
+    if (!row) {
+      // Theoretically unreachable — UPDATE just succeeded. Defensive.
+      throw new UnauthorizedException('refresh token invalid, expired, or revoked');
+    }
+
+    // Defence against extremely-long-lived tokens that survived rotation
+    // before expiry was enforced — keep the expiry check after rotation.
+    if (row.expiresAt.getTime() < Date.now()) {
+      throw new UnauthorizedException('refresh token invalid, expired, or revoked');
+    }
 
     return this.issueTokens(row.wallet);
   }

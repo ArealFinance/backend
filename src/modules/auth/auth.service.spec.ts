@@ -27,6 +27,7 @@ function buildSubject(): AuthService {
       save: vi.fn(),
       create: vi.fn(),
       delete: vi.fn(),
+      update: vi.fn(),
     } as unknown as ConstructorParameters<typeof AuthService>[3],
   );
 }
