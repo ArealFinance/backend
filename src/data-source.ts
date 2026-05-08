@@ -14,12 +14,17 @@ import 'reflect-metadata';
 import dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
 
+import { ClaimHistory } from './entities/claim-history.entity.js';
 import { Event } from './entities/event.entity.js';
+import { LpPositionHistory } from './entities/lp-position-history.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
+import { RevenueDistribution } from './entities/revenue-distribution.entity.js';
+import { Transaction } from './entities/transaction.entity.js';
 import { User } from './entities/user.entity.js';
 import { InitSchema1714780800000 } from './migrations/0001-init.js';
 import { FixEventUniqueness1714867200000 } from './migrations/0002-fix-event-uniqueness.js';
 import { TightenRefreshTokenHash1714953600000 } from './migrations/0003-tighten-refresh-token-hash.js';
+import { ProjectionTables1715040000000 } from './migrations/0004-projection-tables.js';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -29,7 +34,20 @@ export default new DataSource({
   schema: 'areal',
   synchronize: false,
   logging: process.env.TYPEORM_LOGGING === 'true',
-  entities: [Event, User, RefreshToken],
-  migrations: [InitSchema1714780800000, FixEventUniqueness1714867200000, TightenRefreshTokenHash1714953600000],
+  entities: [
+    Event,
+    User,
+    RefreshToken,
+    Transaction,
+    ClaimHistory,
+    RevenueDistribution,
+    LpPositionHistory,
+  ],
+  migrations: [
+    InitSchema1714780800000,
+    FixEventUniqueness1714867200000,
+    TightenRefreshTokenHash1714953600000,
+    ProjectionTables1715040000000,
+  ],
   migrationsTableName: 'typeorm_migrations',
 });
