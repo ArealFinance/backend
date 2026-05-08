@@ -60,9 +60,16 @@ services:
         condition: service_healthy
     ports:
       - '127.0.0.1:${BACKEND_PORT:-3010}:3010'
+      # Metrics listener (separate Nest app, see backend/src/main.ts L11-L14).
+      # Published to host 127.0.0.1 only so the Phase 20 Prometheus container
+      # on the same VPS can scrape via `localhost:9201`. The Cloudflared
+      # ingress rule (backend/scripts/cloudflared-config.snippet.yml) blocks
+      # any path/metrics request on the public surface as defense-in-depth.
+      - '127.0.0.1:${METRICS_PORT:-9201}:9201'
     environment:
       NODE_ENV: production
       PORT: 3010
+      METRICS_PORT: 9201
       # `sslmode=disable` is INTENTIONAL for single-host docker-compose:
       # postgres + backend share the bridge network created by compose, the
       # bridge never crosses the host boundary, and adding TLS inside the
