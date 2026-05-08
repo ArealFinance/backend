@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { HealthController } from './health.controller.js';
+import { HealthController, scrubProbeError } from './health.controller.js';
 
 describe('HealthController', () => {
   it('reports ok when both DB and RPC respond', async () => {
@@ -37,5 +37,37 @@ describe('HealthController', () => {
     const result = await ctrl.check();
     expect(result.status).toBe('degraded');
     expect(result.dependencies.rpc.status).toBe('down');
+  });
+});
+
+describe('scrubProbeError', () => {
+  const originalEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  it('returns the raw message outside production', () => {
+    process.env.NODE_ENV = 'development';
+    expect(scrubProbeError('connection refused at 10.0.0.1:5432')).toBe(
+      'connection refused at 10.0.0.1:5432',
+    );
+  });
+
+  it('categorises as timeout in production', () => {
+    process.env.NODE_ENV = 'production';
+    expect(scrubProbeError('request timeout after 5000ms')).toBe('timeout');
+    expect(scrubProbeError('connect ETIMEDOUT 1.2.3.4:443')).toBe('timeout');
+  });
+
+  it('categorises as auth_failed in production for 401/403/unauthorized', () => {
+    process.env.NODE_ENV = 'production';
+    expect(scrubProbeError('rpc returned 401')).toBe('auth_failed');
+    expect(scrubProbeError('Unauthorized: bad api key')).toBe('auth_failed');
+  });
+
+  it('categorises everything else as unreachable in production', () => {
+    process.env.NODE_ENV = 'production';
+    expect(scrubProbeError('connection refused at 10.0.0.1:5432')).toBe('unreachable');
+    expect(scrubProbeError('ENOTFOUND api.devnet.solana.com')).toBe('unreachable');
   });
 });
