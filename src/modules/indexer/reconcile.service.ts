@@ -8,7 +8,7 @@ import type { Queue } from 'bull';
 import { Repository } from 'typeorm';
 
 import { Event } from '../../entities/event.entity.js';
-import { SOLANA_CONNECTION } from './connection.provider.js';
+import { SOLANA_CONNECTION } from '../../common/solana/connection.module.js';
 import { DecoderService } from './decoder.service.js';
 import { type HistoricalEventJob, INDEXER_QUEUE_NAME } from './dto/event-job.dto.js';
 

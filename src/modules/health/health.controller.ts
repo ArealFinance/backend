@@ -3,7 +3,7 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Connection } from '@solana/web3.js';
 import { DataSource } from 'typeorm';
 
-import { SOLANA_CONNECTION } from '../indexer/connection.provider.js';
+import { SOLANA_CONNECTION } from '../../common/solana/connection.module.js';
 
 interface DependencyHealth {
   status: 'ok' | 'down';

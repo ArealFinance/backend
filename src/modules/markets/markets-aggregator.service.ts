@@ -15,7 +15,7 @@ import { DailyPoolAggregate } from '../../entities/daily-pool-aggregate.entity.j
 import { PoolSnapshot } from '../../entities/pool-snapshot.entity.js';
 import { ProtocolSummary } from '../../entities/protocol-summary.entity.js';
 import { Transaction } from '../../entities/transaction.entity.js';
-import { SOLANA_CONNECTION } from '../indexer/connection.provider.js';
+import { SOLANA_CONNECTION } from '../../common/solana/connection.module.js';
 import { MetricsService } from '../metrics/metrics.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
 

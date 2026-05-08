@@ -6,6 +6,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { SolanaConnectionModule } from './common/solana/connection.module.js';
 import configuration from './config/configuration.js';
 import { ClaimHistory } from './entities/claim-history.entity.js';
 import { DailyPoolAggregate } from './entities/daily-pool-aggregate.entity.js';
@@ -95,6 +96,7 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
         limit: 60, // 60 req / min per IP — tighten per route as needed.
       },
     ]),
+    SolanaConnectionModule,
     AuthModule,
     IndexerModule,
     HealthModule,

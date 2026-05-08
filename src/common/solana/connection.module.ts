@@ -1,14 +1,19 @@
-import { Provider } from '@nestjs/common';
+import { Global, Module, Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Connection } from '@solana/web3.js';
 
 /**
- * Singleton Solana `Connection` shared by the indexer.
+ * Singleton Solana `Connection` shared across the app.
  *
  * One Connection per process is the documented best practice — it owns the
  * websocket subscription pool, and creating multiple Connections to the same
  * RPC fragments subscriptions and burns RPC credit. The websocket URL is
  * derived from the HTTP URL by web3.js automatically when not provided.
+ *
+ * Exposed at root via `@Global()` so feature modules (indexer, markets,
+ * health, …) can inject `SOLANA_CONNECTION` without each importing this
+ * module explicitly. The provider lives in `common/` because RPC access is
+ * a cross-cutting concern, not owned by any single feature.
  */
 export const SOLANA_CONNECTION = Symbol('SOLANA_CONNECTION');
 
@@ -27,3 +32,10 @@ export const connectionProvider: Provider = {
     });
   },
 };
+
+@Global()
+@Module({
+  providers: [connectionProvider],
+  exports: [connectionProvider],
+})
+export class SolanaConnectionModule {}

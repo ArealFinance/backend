@@ -10,7 +10,7 @@ import {
   type ProjectionEmitPayload,
 } from '../projections/event-projection.service.js';
 import { RealtimeService } from '../realtime/realtime.service.js';
-import { SOLANA_CONNECTION } from './connection.provider.js';
+import { SOLANA_CONNECTION } from '../../common/solana/connection.module.js';
 import { DecoderService } from './decoder.service.js';
 import { type IndexerJob, INDEXER_QUEUE_NAME } from './dto/event-job.dto.js';
 import { PersisterService } from './persister.service.js';
