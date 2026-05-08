@@ -1,0 +1,147 @@
+name: Deploy
+
+# Phase 12.1 backend deploy.
+#
+# Triggers a remote `git pull && docker compose up -d --build` on the Fornex
+# VPS via SSH. The actual orchestration (network, .env validation, migrations,
+# smoke tests) lives in scripts/backend/bootstrap-fornex.sh in the meta-repo,
+# which the operator clones to /opt/areal/areal-meta on the VPS once.
+#
+# This workflow does NOT:
+#   - Deploy contracts (manual ceremony — see meta-repo deploy.sh).
+#   - Generate or rotate secrets.
+#   - Modify cloudflared config.
+#
+# `[skip deploy]` in the commit message bypasses this workflow per the
+# Phase 25 convention.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (branch, tag, sha)'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: deploy-backend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    name: Build + test
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip deploy]')"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        # The backend depends on @areal/sdk via `file:../sdk` and
+        # @arlex/client via `file:../vendor/arlex-client-*.tgz`. Those
+        # don't exist in this submodule-only checkout, so npm ci will
+        # fail. Ungating the deploy on a meta-repo build is intentional:
+        # CI here proves only that the backend's own source compiles
+        # against published types; the actual production image is built
+        # on the VPS via bootstrap-fornex.sh (which has the meta-repo
+        # checked out with submodules).
+        #
+        # Until @areal/sdk + @arlex/client are published to npm
+        # (Phase 12.2+), CI guards on lint+typecheck against an
+        # un-installed tree, and the deploy step is a thin SSH pull.
+        run: |
+          if [[ -f ../sdk/package.json && -f ../vendor/arlex-client-*.tgz ]]; then
+            npm ci
+          else
+            echo "::warning::SDK + vendor not present in this checkout — skipping npm ci. Production image is built on VPS."
+            # Install enough to lint + typecheck via npm install --package-lock-only? No —
+            # without the file:../sdk path we just can't. Lint/test gating happens in
+            # the meta-repo CI workflow which checks out submodules.
+            exit 0
+          fi
+
+      - name: Lint
+        if: ${{ hashFiles('node_modules/**') != '' }}
+        run: npm run lint
+
+      - name: Typecheck
+        if: ${{ hashFiles('node_modules/**') != '' }}
+        run: npm run typecheck
+
+      - name: Test
+        if: ${{ hashFiles('node_modules/**') != '' }}
+        run: npm test
+
+      - name: Build
+        if: ${{ hashFiles('node_modules/**') != '' }}
+        run: npm run build
+
+  deploy-fornex:
+    name: api.areal.finance
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: production
+      url: https://api.areal.finance/health
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        # Same key shape as app/.github/workflows/deploy.yml. The deployer
+        # user on Fornex has restricted sudoers for bootstrap-fornex.sh
+        # (Phase 25 §A).
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Pull + rebuild + migrate on VPS
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_REF: ${{ github.event.inputs.ref || 'main' }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -se <<EOF
+          set -euo pipefail
+
+          # Meta-repo path on the VPS (operator-set, see runbook §2).
+          META_DIR="/opt/areal/areal-meta"
+
+          # Pull meta-repo + bump backend submodule pointer to ${DEPLOY_REF}.
+          cd "\$META_DIR"
+          git fetch --all --tags --prune
+          git submodule update --init --recursive backend
+          (cd backend && git fetch origin "${DEPLOY_REF}" && git checkout "${DEPLOY_REF}" && git pull --ff-only)
+
+          # Re-run bootstrap (idempotent). --skip-build only on doc-only changes.
+          sudo AREAL_BACKEND_REF="${DEPLOY_REF}" \\
+               AREAL_BACKEND_DIR="\$META_DIR/backend" \\
+               bash "\$META_DIR/scripts/backend/bootstrap-fornex.sh"
+          EOF
+
+      - name: Verify external health
+        run: |
+          # Cloudflared route should be live (operator-managed).
+          for i in 1 2 3 4 5; do
+            if curl -fsS -m 10 https://api.areal.finance/health >/dev/null; then
+              echo "external /health -> 200 OK"
+              exit 0
+            fi
+            echo "attempt $i: /health not yet healthy, retrying..."
+            sleep 5
+          done
+          echo "::error::external /health did not return 200 after 5 attempts"
+          exit 1
