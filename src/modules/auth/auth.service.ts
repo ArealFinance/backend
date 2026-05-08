@@ -133,6 +133,21 @@ export class AuthService {
 
   // -- verification primitives (kept public for unit testing) --------------
 
+  /**
+   * The exact format we accept for the login message. Anchored at both ends
+   * so trailing junk / leading prefixes are rejected (no substring matches).
+   *
+   * Two client variants are accepted (kept for backward-compat with older
+   * clients): `for wallet <pubkey>` (Phase 5 precedent) and `from <pubkey>`
+   * (older form). Anything else returns null and the caller responds 401.
+   *
+   * The wallet capture is restricted to the base58 alphabet (32-44 chars) so
+   * a user-controlled message cannot smuggle a `wallet` value containing
+   * regex metacharacters, whitespace, or punctuation.
+   */
+  static readonly LOGIN_MESSAGE_RE =
+    /^Login to Areal at (\S+) (?:for wallet|from) ([1-9A-HJ-NP-Za-km-z]{32,44})\s*$/;
+
   /** ed25519 signature verification. Returns false on any decode/length error. */
   verifySignature(wallet: string, signatureBase58: string, message: string): boolean {
     try {
@@ -150,32 +165,46 @@ export class AuthService {
   }
 
   /**
-   * Extracts an ISO-8601 timestamp from the message and enforces
+   * Parse the login message into its declared fields, or return null if the
+   * format doesn't match. Public for unit tests; the login flow walks the
+   * fields one at a time so future granular metric labelling stays cheap.
+   */
+  verifyMessageStructure(message: string): { timestamp: string; wallet: string } | null {
+    const m = message.match(AuthService.LOGIN_MESSAGE_RE);
+    if (!m) return null;
+    return { timestamp: m[1]!, wallet: m[2]! };
+  }
+
+  /**
+   * Extracts the ISO-8601 timestamp from the message and enforces
    * `|now - ts| <= TIMESTAMP_SKEW_MS`. Returns false if the format doesn't
    * match or the timestamp is unparseable.
    *
    * The expected format is:
    *   `Login to Areal at <ISO-8601> for wallet <pubkey>`
    *
-   * We deliberately match BOTH `at <ts> for wallet` (Phase 5 precedent) and
-   * `at <ts> from <pubkey>` (older client variant) to avoid coupling the
-   * server to a single client revision while still rejecting freeform text.
+   * We deliberately accept both `at <ts> for wallet <pubkey>` (Phase 5
+   * precedent) and `at <ts> from <pubkey>` (older client variant) to avoid
+   * coupling the server to a single client revision.
    */
   verifyTimestamp(message: string): boolean {
-    const match = message.match(/at (\S+) (?:for|from) (?:wallet )?\S+/);
-    if (!match) return false;
-    const ts = Date.parse(match[1]);
+    const parsed = this.verifyMessageStructure(message);
+    if (!parsed) return false;
+    const ts = Date.parse(parsed.timestamp);
     if (!Number.isFinite(ts)) return false;
     return Math.abs(Date.now() - ts) <= AuthService.TIMESTAMP_SKEW_MS;
   }
 
   /**
-   * Confirms the message body actually embeds the wallet the client claims —
-   * defends against signature-replay across wallets where a server only checked
-   * the timestamp. The wallet string is matched as a whole word.
+   * Confirms the message body declares the wallet the client claims — defends
+   * against signature-replay across wallets. Match is exact (against the
+   * structured wallet field) rather than substring — a substring check would
+   * accept a malicious message embedding the victim wallet anywhere in
+   * arbitrary text alongside a different wallet field.
    */
   verifyMessageBindsWallet(message: string, wallet: string): boolean {
-    return message.includes(wallet);
+    const parsed = this.verifyMessageStructure(message);
+    return parsed?.wallet === wallet;
   }
 
   // -- housekeeping --------------------------------------------------------

@@ -8,9 +8,9 @@ import { AuthService } from './auth.service.js';
 /**
  * Cryptographic primitives in `AuthService` are pure — they don't touch the
  * DB or JWT module. We instantiate the service with stubbed dependencies and
- * exercise `verifySignature`, `verifyTimestamp`, and `verifyMessageBindsWallet`
- * directly. The login flow that wires them together is integration-tested
- * separately (out of scope for Phase 12.1 unit suite).
+ * exercise `verifySignature`, `verifyTimestamp`, `verifyMessageStructure`,
+ * and `verifyMessageBindsWallet` directly. The login + refresh flows that
+ * wire them together are integration-tested separately (Phase 12.2).
  */
 
 function buildSubject(): AuthService {
@@ -83,6 +83,8 @@ describe('AuthService.verifyTimestamp', () => {
 
   it('rejects messages without the expected sentinel', () => {
     expect(subject.verifyTimestamp('Hello world')).toBe(false);
+    // Old `at notatimestamp for wallet xxx` form would slip through a loose
+    // substring matcher — the anchored regex now requires the full prefix.
     expect(subject.verifyTimestamp('at notatimestamp for wallet xxx')).toBe(false);
   });
 
@@ -90,6 +92,17 @@ describe('AuthService.verifyTimestamp', () => {
     const wallet = Keypair.generate().publicKey.toBase58();
     const msg = `Login to Areal at ${new Date().toISOString()} from ${wallet}`;
     expect(subject.verifyTimestamp(msg)).toBe(true);
+  });
+
+  it('rejects messages with leading or trailing junk (anchored regex)', () => {
+    const wallet = Keypair.generate().publicKey.toBase58();
+    const fresh = new Date().toISOString();
+    expect(subject.verifyTimestamp(`prefix Login to Areal at ${fresh} for wallet ${wallet}`)).toBe(
+      false,
+    );
+    expect(subject.verifyTimestamp(`Login to Areal at ${fresh} for wallet ${wallet} suffix`)).toBe(
+      false,
+    );
   });
 });
 
@@ -102,9 +115,22 @@ describe('AuthService.verifyMessageBindsWallet', () => {
     expect(subject.verifyMessageBindsWallet(msg, wallet)).toBe(true);
   });
 
-  it('rejects messages that omit the wallet pubkey', () => {
+  it('rejects messages that name a different wallet field', () => {
     const wallet = Keypair.generate().publicKey.toBase58();
-    const msg = `Login to Areal at ${new Date().toISOString()} for wallet SOMEONE_ELSE`;
+    const other = Keypair.generate().publicKey.toBase58();
+    const msg = `Login to Areal at ${new Date().toISOString()} for wallet ${other}`;
     expect(subject.verifyMessageBindsWallet(msg, wallet)).toBe(false);
+  });
+
+  it('rejects substring smuggling — wallet must be the exact field, not anywhere in the text', () => {
+    // A naive `message.includes(wallet)` would let an attacker craft
+    // "Login to Areal at <ts> for wallet <attacker> trailing <victim>" and
+    // pass the binding check (then make the victim sign with their key).
+    // Anchored regex + structured equality on the captured field shuts this
+    // down — trailing text fails the end-anchor before binding even runs.
+    const victim = Keypair.generate().publicKey.toBase58();
+    const attacker = Keypair.generate().publicKey.toBase58();
+    const msg = `Login to Areal at ${new Date().toISOString()} for wallet ${attacker} extra ${victim}`;
+    expect(subject.verifyMessageBindsWallet(msg, victim)).toBe(false);
   });
 });
