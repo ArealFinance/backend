@@ -20,6 +20,7 @@ import type { SwapProjector } from './projectors/swap.projector.js';
  */
 
 const SHARED_METRICS = new MetricsService();
+const VALID_WALLET = 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK';
 
 function makeService(): {
   service: EventProjectionService;
@@ -112,7 +113,7 @@ describe('EventProjectionService (dispatcher)', () => {
     const { service, claim, swap, liquidity, revenue } = makeService();
     await expect(
       service.projectInTx(FAKE_MANAGER, decoded('SomeFutureEventNotProjected'), META),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
     expect(claim.project).not.toHaveBeenCalled();
     expect(swap.project).not.toHaveBeenCalled();
     expect(liquidity.project).not.toHaveBeenCalled();
@@ -136,5 +137,79 @@ describe('EventProjectionService (dispatcher)', () => {
     await service.projectInTx(FAKE_MANAGER, decoded('SwapExecuted'), META);
     const after = await histogramCount(metrics);
     expect(after - before).toBe(1);
+  });
+
+  // ── Phase 12.3.1: emit-payload returns ───────────────────────────────────
+  // The 6 wallet-keyed kinds return a payload that the indexer consumer
+  // fans out POST-COMMIT. Tests below pin the contract so the realtime
+  // wire-up at the consumer layer can rely on it.
+
+  it.each([
+    [
+      'RewardsClaimed',
+      { claimant: VALID_WALLET, otMint: 'OT-mint', amount: '1', cumulativeClaimed: '5' },
+      'claim',
+    ],
+    ['SwapExecuted', { user: VALID_WALLET, pool: 'POOL', amountIn: '1', amountOut: '2' }, 'swap'],
+    [
+      'LiquidityAdded',
+      { provider: VALID_WALLET, pool: 'POOL', amountA: '1', amountB: '2', sharesMinted: '3' },
+      'add_lp',
+    ],
+    [
+      'LiquidityRemoved',
+      { provider: VALID_WALLET, pool: 'POOL', amountA: '1', amountB: '2', sharesBurned: '3' },
+      'remove_lp',
+    ],
+    [
+      'ZapLiquidityExecuted',
+      { provider: VALID_WALLET, pool: 'POOL', inputA: '1', inputB: '2', sharesMinted: '3' },
+      'zap_lp',
+    ],
+    ['RwtMinted', { user: VALID_WALLET, depositAmount: '1', rwtAmount: '2' }, 'mint_rwt'],
+  ])('returns emit payload {kind=%s} for %s', async (eventName, data, expectedKind) => {
+    const { service } = makeService();
+    const payload = await service.projectInTx(
+      FAKE_MANAGER,
+      decoded(eventName as string, data as Record<string, unknown>),
+      META,
+    );
+    expect(payload).not.toBeNull();
+    expect(payload?.kind).toBe(expectedKind);
+    expect(payload?.wallet).toBe(VALID_WALLET);
+    expect(payload?.signature).toBe(META.signature);
+  });
+
+  it('returns null for RevenueDistributed (wallet-less event, no per-wallet emit)', async () => {
+    const { service } = makeService();
+    const payload = await service.projectInTx(
+      FAKE_MANAGER,
+      decoded('RevenueDistributed', {
+        otMint: 'OT-mint',
+        totalAmount: '1000',
+        protocolFee: '10',
+        distributionCount: 5,
+        numDestinations: 3,
+      }),
+      META,
+    );
+    expect(payload).toBeNull();
+  });
+
+  it('does NOT return an emit payload when the projector throws', async () => {
+    const { service, claim } = makeService();
+    claim.project.mockRejectedValueOnce(new Error('rollback'));
+    await expect(
+      service.projectInTx(
+        FAKE_MANAGER,
+        decoded('RewardsClaimed', { claimant: VALID_WALLET }),
+        META,
+      ),
+    ).rejects.toThrow(/rollback/);
+    // The throw means the emit never reaches the caller — verified by the
+    // dispatcher's `try/catch/finally` shape (no return path past the throw).
+    // The post-commit fan-out in IndexerConsumer is gated on a successful
+    // resolution, so a thrown error guarantees no realtime leak.
+    expect(claim.project).toHaveBeenCalledOnce();
   });
 });

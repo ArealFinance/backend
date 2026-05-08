@@ -15,8 +15,11 @@ import dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
 
 import { ClaimHistory } from './entities/claim-history.entity.js';
+import { DailyPoolAggregate } from './entities/daily-pool-aggregate.entity.js';
 import { Event } from './entities/event.entity.js';
 import { LpPositionHistory } from './entities/lp-position-history.entity.js';
+import { PoolSnapshot } from './entities/pool-snapshot.entity.js';
+import { ProtocolSummary } from './entities/protocol-summary.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { RevenueDistribution } from './entities/revenue-distribution.entity.js';
 import { Transaction } from './entities/transaction.entity.js';
@@ -25,6 +28,8 @@ import { InitSchema1714780800000 } from './migrations/0001-init.js';
 import { FixEventUniqueness1714867200000 } from './migrations/0002-fix-event-uniqueness.js';
 import { TightenRefreshTokenHash1714953600000 } from './migrations/0003-tighten-refresh-token-hash.js';
 import { ProjectionTables1715040000000 } from './migrations/0004-projection-tables.js';
+import { MarketsAggregates1715140000000 } from './migrations/0005-markets-aggregates.js';
+import { PoolSnapshotPrices1715140000001 } from './migrations/0006-pool-snapshot-prices.js';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -42,12 +47,17 @@ export default new DataSource({
     ClaimHistory,
     RevenueDistribution,
     LpPositionHistory,
+    PoolSnapshot,
+    DailyPoolAggregate,
+    ProtocolSummary,
   ],
   migrations: [
     InitSchema1714780800000,
     FixEventUniqueness1714867200000,
     TightenRefreshTokenHash1714953600000,
     ProjectionTables1715040000000,
+    MarketsAggregates1715140000000,
+    PoolSnapshotPrices1715140000001,
   ],
   migrationsTableName: 'typeorm_migrations',
 });

@@ -19,10 +19,13 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 
+import { ConfigService } from '@nestjs/config';
+
 import { AppModule } from './app.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { MetricsAppModule } from './modules/metrics/metrics-app.module.js';
 import { MetricsService } from './modules/metrics/metrics.service.js';
+import { RealtimeRedisIoAdapter } from './modules/realtime/redis-io.adapter.js';
 
 /**
  * Production CORS allow-list. ONLY the public app + ops panel.
@@ -78,6 +81,19 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document, {
     swaggerOptions: { persistAuthorization: true },
   });
+
+  // -- Socket.IO adapter (Phase 12.3.1) ----------------------------------
+  // Wire BEFORE `app.listen` so the gateway picks up the adapter at the
+  // moment the underlying HTTP server initialises Socket.IO. The adapter
+  // fan-outs emits across replicas via Redis pub/sub — without it, a cron
+  // firing on the worker replica only reaches sockets on that replica.
+  // Single-node deploys still benefit (consistent code path; one extra
+  // round trip per emit is negligible).
+  const wsConfig = app.get(ConfigService);
+  const wsRedisUrl = wsConfig.get<string>('redis.url') ?? 'redis://127.0.0.1:6379/0';
+  const wsAdapter = new RealtimeRedisIoAdapter(app);
+  await wsAdapter.connectToRedis(wsRedisUrl);
+  app.useWebSocketAdapter(wsAdapter);
 
   // Bind host: in container, must be 0.0.0.0 so Docker port-mapping
   // (which routes from host's 127.0.0.1 → container) can reach the listener.

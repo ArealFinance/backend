@@ -11,7 +11,7 @@ import type { Queue } from 'bull';
 
 import { DecoderService } from './decoder.service.js';
 import { type LiveEventJob, INDEXER_QUEUE_NAME } from './dto/event-job.dto.js';
-import { SOLANA_CONNECTION } from './connection.provider.js';
+import { SOLANA_CONNECTION } from '../../common/solana/connection.module.js';
 
 /**
  * Subscribes to `onLogs` for each registered Areal program and enqueues

@@ -64,6 +64,109 @@ export class MetricsService implements OnModuleInit {
     labelNames: ['event_name'] as const,
   });
 
+  // ── Phase 12.3.1: markets aggregator + realtime ──────────────────────────
+
+  /**
+   * Aggregator job duration. One label per cron job (`snapshot60s`,
+   * `rollup5m`, `summary30s`). Alert on p95 > 30s for `snapshot60s` —
+   * a slow snapshot starves the next tick and the realtime emit cadence
+   * drifts.
+   */
+  readonly aggregatorLatency = new Histogram({
+    name: 'aggregator_latency_seconds',
+    help: 'Markets aggregator job latency (seconds) by job',
+    labelNames: ['job'] as const,
+    buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120],
+  });
+
+  /**
+   * Aggregator skip counter — incremented when the advisory lock is held
+   * by another worker and we silently no-op. A persistent non-zero rate
+   * usually signals a wedged job (lock acquired and never released).
+   */
+  readonly aggregatorSkipTotal = new Counter({
+    name: 'aggregator_skip_total',
+    help: 'Aggregator job skips (advisory lock contention)',
+    labelNames: ['job'] as const,
+  });
+
+  /**
+   * RPC failure counter for the markets reader. Distinct from
+   * `projection_errors` because aggregator failures don't roll back
+   * a chain-event TX — they only delay the next snapshot.
+   */
+  readonly aggregatorRpcFailures = new Counter({
+    name: 'aggregator_rpc_failures_total',
+    help: 'Aggregator RPC failures (markets reader / chain reads)',
+    labelNames: ['job'] as const,
+  });
+
+  /**
+   * Cumulative Socket.IO connections accepted since process start.
+   * Increments only — useful for connect-rate alerting via PromQL `rate()`.
+   * Includes both authenticated (with JWT) and anonymous connections —
+   * anonymity is allowed for public rooms (`protocol`, `pool:*`).
+   *
+   * Pair with `realtimeConnectionsActive` (Gauge) for "how many sockets
+   * are LIVE right now" — the Counter alone can't answer that question
+   * because it never decrements.
+   */
+  readonly realtimeConnectionsTotal = new Counter({
+    name: 'realtime_connections_total',
+    help: 'Socket.IO connections accepted (cumulative since process start)',
+  });
+
+  /**
+   * Currently active Socket.IO connections. Increments on `handleConnection`
+   * (after the throttle gate passes) and decrements on `handleDisconnect`.
+   * Read directly to answer "how many sockets are live right now" without
+   * relying on a `rate()`-derived cumulative metric.
+   */
+  readonly realtimeConnectionsActive = new Gauge({
+    name: 'realtime_connections_active',
+    help: 'Socket.IO connections currently live',
+  });
+
+  /**
+   * Server-emitted realtime messages, labelled by channel. Useful for
+   * detecting silent emit-loop regressions (e.g. a new event that fires
+   * 10x more often than expected).
+   */
+  readonly realtimeEmits = new Counter({
+    name: 'realtime_emits_total',
+    help: 'Server-side realtime emits by channel',
+    labelNames: ['channel'] as const,
+  });
+
+  /**
+   * Subscription requests by room type (`protocol`, `pool`, `wallet`).
+   * Failed subscriptions (auth rejection, malformed room) increment the
+   * `rejected` label so ops can spot client bugs.
+   */
+  readonly realtimeSubscriptions = new Counter({
+    name: 'realtime_subscriptions_total',
+    help: 'Realtime subscribe attempts by room type',
+    labelNames: ['room_type', 'outcome'] as const,
+  });
+
+  /**
+   * Handshake rejections by reason (Phase 12.3.1 follow-up R-12.3.1-6).
+   *
+   * `rate_limit` — IP exceeded the configured per-window cap and was
+   * disconnected before the JWT verify hot path. A sustained non-zero
+   * rate flags either a misbehaving client (Socket.IO reconnect storm
+   * after a server bug) or an actual connection-flood attempt.
+   *
+   * `redis_error` — the throttle counter couldn't be read/written. We
+   * still admit the connection (fail-open) but record the miss so ops
+   * sees Redis hiccups even when the user-facing surface stays green.
+   */
+  readonly realtimeHandshakeRejected = new Counter({
+    name: 'realtime_handshake_rejected_total',
+    help: 'Socket.IO handshakes rejected before JWT verify',
+    labelNames: ['reason'] as const,
+  });
+
   /**
    * Guards against double-init when the same instance is wired into both the
    * main Nest app and the secondary MetricsAppModule (Phase 12.1 split-listener
@@ -83,5 +186,13 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.authFailures);
     this.registry.registerMetric(this.projectionLatency);
     this.registry.registerMetric(this.projectionErrors);
+    this.registry.registerMetric(this.aggregatorLatency);
+    this.registry.registerMetric(this.aggregatorSkipTotal);
+    this.registry.registerMetric(this.aggregatorRpcFailures);
+    this.registry.registerMetric(this.realtimeConnectionsTotal);
+    this.registry.registerMetric(this.realtimeConnectionsActive);
+    this.registry.registerMetric(this.realtimeEmits);
+    this.registry.registerMetric(this.realtimeSubscriptions);
+    this.registry.registerMetric(this.realtimeHandshakeRejected);
   }
 }

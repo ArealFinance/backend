@@ -1,0 +1,322 @@
+# Operator Runbook — Phase 12.3.1
+
+Markets aggregates + Socket.IO realtime substrate.
+
+## What landed
+
+- **3 new tables** in `areal` schema:
+  - `pool_snapshots` (60s cadence, append-only)
+  - `daily_pool_aggregates` (5min cadence, UPSERT per `(pool, day)`)
+  - `protocol_summary` (singleton, 30s cadence, UPDATE in place)
+- **3 cron jobs** registered as Bull repeatables on the
+  `markets-aggregator` queue — `pg_try_advisory_xact_lock` makes them
+  multi-replica safe.
+- **3 REST endpoints** under `/markets`:
+  - `GET /markets/pools/:pool/snapshots`
+  - `GET /markets/pools/:pool/aggregate?days=N`
+  - `GET /markets/summary`
+- **Socket.IO gateway** on `/realtime` namespace with Redis adapter.
+
+## Migrations 0005 + 0006 + 0007
+
+Run AFTER deploy, BEFORE traffic ramp. All three apply in sequence:
+
+```bash
+npm run migration:run
+```
+
+`0005-markets-aggregates` creates the three aggregate tables.
+
+`0006-pool-snapshot-prices` (R-12.3.1-1) adds four nullable columns to
+`areal.pool_snapshots`: `price_a_usdc`, `price_b_usdc`, `decimals_a`,
+`decimals_b`. Captured per-snapshot, used by the 5min rollup to compute
+`apy_24h`. **Historical rows from before 0006 will have NULL prices /
+decimals / apy until the next snapshot cycle replaces them — this is
+expected and harmless** (the rollup leaves `apy_24h` NULL for any pool
+where the inputs aren't all present).
+
+`0007-rename-distributor-count` (R-12.3.1-2) renames
+`areal.protocol_summary.distributor_count` →
+`cumulative_distributor_count` to surface the metric's true semantics
+(`COUNT(DISTINCT primary_actor) FROM events WHERE
+event_name='RevenueDistributed'` — cumulative-since-deploy, not
+current-state). The wire format on `protocol_summary_tick` and
+`GET /markets/summary` changes accordingly: clients reading
+`distributorCount` must switch to `cumulativeDistributorCount`. The
+rename is reversible via `migration:revert`.
+
+Verifies (post-migration):
+- `areal.pool_snapshots`, `areal.daily_pool_aggregates`,
+  `areal.protocol_summary` tables exist.
+- `pool_snapshots` has the four new nullable columns:
+  ```sql
+  SELECT column_name FROM information_schema.columns
+   WHERE table_schema = 'areal' AND table_name = 'pool_snapshots'
+     AND column_name IN ('price_a_usdc', 'price_b_usdc', 'decimals_a', 'decimals_b');
+  -- expect: 4 rows
+  ```
+- `protocol_summary` contains exactly one row with `id='singleton'`:
+  ```sql
+  SELECT count(*), id FROM areal.protocol_summary GROUP BY id;
+  -- expect: (1, 'singleton')
+  ```
+- The CHECK constraint rejects a second insert (defensive):
+  ```sql
+  INSERT INTO areal.protocol_summary (id) VALUES ('not-singleton');
+  -- expect: ERROR: new row for relation "protocol_summary" violates check constraint
+  ```
+
+Rollback (if needed):
+```bash
+npm run migration:revert  # reverts 0007 only — re-run for 0006 / 0005
+```
+
+## Bull repeatable verification
+
+Within 60 seconds of process start, the bootstrap registers three
+repeatables. Verify with `redis-cli`:
+
+```bash
+# Should be ≥ 1 (first scheduled run)
+redis-cli zcard bull:markets-aggregator:delayed
+
+# Repeatable definitions (should be 3)
+redis-cli zrange bull:markets-aggregator:repeat 0 -1
+```
+
+If any are missing:
+1. Check process logs for `markets-aggregator repeatables registered (60s / 5min / 30s)`.
+2. Ensure the process has `BullModule` configured with the same Redis URL
+   the verification command points to.
+3. Check `MarketsAggregatorBootstrap.onModuleInit` did not throw — the
+   try/catch in Nest's lifecycle log surfaces it as a hard ERROR.
+
+## Socket.IO smoke test
+
+From a browser DevTools console (any allowed origin):
+
+```js
+const s = io('wss://api.areal.finance/realtime', {
+  transports: ['websocket'],
+});
+s.on('connect', () => {
+  console.log('connected', s.id);
+  s.emit('subscribe', { room: 'protocol' }, console.log);
+});
+s.on('protocol_summary_tick', (p) => console.log('tick', p));
+```
+
+Expected: a `protocol_summary_tick` payload arrives within 30 seconds
+(the cron cadence).
+
+For the `wallet:*` private-room path, attach a JWT via either the
+`Authorization` header (browser-side requires custom transports) OR the
+`auth.token` body field:
+
+```js
+const s = io('wss://api.areal.finance/realtime', {
+  transports: ['websocket'],
+  auth: { token: 'eyJ...' },
+});
+s.emit('subscribe', { room: 'wallet:<your-base58>' }, console.log);
+// expect: { ok: true } if jwt.sub === <your-base58>
+```
+
+## Prometheus metrics
+
+New metrics scraped on the existing `/metrics` listener
+(`http://127.0.0.1:9201/metrics`):
+
+| Metric                              | Type      | Labels        |
+| ----------------------------------- | --------- | ------------- |
+| `aggregator_latency_seconds`        | Histogram | `job`         |
+| `aggregator_skip_total`             | Counter   | `job`         |
+| `aggregator_rpc_failures_total`     | Counter   | `job`         |
+| `realtime_connections_total`        | Counter   | —             |
+| `realtime_connections_active`       | Gauge     | —             |
+| `realtime_emits_total`              | Counter   | `channel`     |
+| `realtime_subscriptions_total`      | Counter   | `room_type`, `outcome` |
+| `realtime_handshake_rejected_total` | Counter   | `reason`      |
+
+`realtime_connections_total` is the cumulative-since-boot connect counter
+(use with `rate()` for connect-rate alerting). `realtime_connections_active`
+is a Gauge that increments on connect and decrements on disconnect — read
+it directly to see the currently-live socket count. Together they answer
+"how fast are people connecting" AND "how many are connected right now"
+without one metric trying to do both jobs.
+
+Verification:
+```bash
+curl -s http://127.0.0.1:9201/metrics | grep -E '^(aggregator|realtime)_'
+```
+
+## Realtime handshake throttle (R-12.3.1-6)
+
+Per-IP rate-limit on the Socket.IO handshake hot path. Defends the JWT
+HMAC-verify against bogus-token connection floods. The cap is a sliding
+window in Redis; rejections happen BEFORE `jwt.verifyAsync`, so an attacker
+can't burn CPU by holding many invalid sockets open.
+
+Defaults: **20 connect attempts / 60s rolling window per IP**. Override at
+process start via:
+
+```bash
+REALTIME_HANDSHAKE_RATE_LIMIT_COUNT=40
+REALTIME_HANDSHAKE_RATE_LIMIT_WINDOW_SEC=60
+```
+
+Tuning guidance:
+- A legitimate UI client opens ~1 socket per tab; Socket.IO reconnect backs
+  off to 5s, so even a flapping link stays well below 20/min. If you see
+  sustained `realtime_handshake_rejected_total{reason="rate_limit"}` on a
+  legitimate origin, raise `_COUNT` rather than disabling the throttle.
+- A `redis_error` rate above zero means the Redis client driving the
+  counter is unhealthy — connections are still admitted (fail-open), but
+  the throttle is effectively disabled while the error rate is high. Page
+  the Redis owner.
+
+Monitor: `realtime_handshake_rejected_total` rate. The Alertmanager rule
+below fires on sustained rejections (production = real attack, dev = a
+local script gone wrong).
+
+## Alert rules (Prometheus)
+
+Add to the existing rule file (`prometheus/alerts.yml` or equivalent):
+
+```yaml
+groups:
+  - name: areal_aggregator
+    rules:
+      - alert: AggregatorSnapshotSlow
+        # p95 latency for the 60s cron > 30s — the next tick will starve
+        # and the realtime emit cadence drifts away from "every 60 seconds".
+        expr: histogram_quantile(
+                0.95,
+                sum by (le) (
+                  rate(aggregator_latency_seconds_bucket{job="snapshot60s"}[5m])
+                )
+              ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "snapshot60s p95 latency > 30s"
+          description: "Aggregator snapshot cron is slow; realtime emits will drift."
+
+      - alert: BullMarketsAggregatorBacklog
+        # > 5 waiting jobs on the markets-aggregator queue means the
+        # consumer cannot keep up with the cron cadence. Diagnose via
+        # `bull:markets-aggregator:wait` set in Redis.
+        expr: bull_queue_waiting{queue="markets-aggregator"} > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "markets-aggregator queue backlog > 5"
+
+      - alert: AggregatorRpcFailures
+        # Sustained RPC failures — the chain reader is unreachable;
+        # snapshot60s will skip after 3 consecutive failures.
+        expr: rate(aggregator_rpc_failures_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "aggregator RPC failures sustained"
+
+  - name: areal_realtime
+    rules:
+      - alert: RealtimeHandshakeRejectionsSustained
+        # Sustained per-IP throttle rejections. Above ~0.5 rejects/sec on
+        # a public-facing edge usually means either a misbehaving client
+        # (Socket.IO reconnect storm) or an actual connect-flood attempt.
+        # Investigate via the gateway logs (`handshake rejected: ip=...`).
+        expr: sum(rate(realtime_handshake_rejected_total{reason="rate_limit"}[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "realtime handshake rejections sustained > 0.5/s"
+          description: "Per-IP throttle is rejecting handshakes for >10m. Inspect logs for offending IPs."
+
+      - alert: RealtimeHandshakeThrottleRedisError
+        # Counter for the fail-open path: Redis is unreachable so the
+        # throttle is silently bypassed. Connections still flow but the
+        # anti-DoS gate is effectively off — page the Redis owner.
+        expr: sum(rate(realtime_handshake_rejected_total{reason="redis_error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "handshake-throttle Redis errors sustained"
+          description: "Throttle is failing open. Anti-DoS gate effectively disabled."
+```
+
+## JWT iss + aud rollout (R-12.3.1-7)
+
+The backend now stamps `issuer=areal-backend` + `audience=areal-api` into
+every freshly-issued access token, and the verifier (REST `JwtStrategy`
++ `/realtime` handshake) rejects tokens missing or mismatched on either
+claim.
+
+**User-visible impact: every currently-issued access token becomes
+invalid the moment the new build serves traffic.** Frontend / SDK
+consumers will see `401 Unauthorized` on the next REST call after
+deploy; the standard refresh flow will fail (the refresh-token rows are
+unchanged in the DB but the access-token verifier rejects the legacy
+shape). End users must **re-authenticate** by signing the wallet
+challenge again — the existing `WalletConnect` flow handles this with
+no UI change.
+
+For the hackathon-stage product this is acceptable; document the
+expected support volume around the deploy window. There is no rollback
+plan that preserves legacy tokens — once the new verifier is live, the
+rename is the new contract.
+
+## Operational checklist
+
+Post-deploy (10 gates — all must be GREEN before traffic ramp):
+- [ ] **1. `migration:run` succeeded** — `0005-markets-aggregates` applied;
+      `SELECT * FROM areal.protocol_summary` returns exactly one row with
+      `id='singleton'`.
+- [ ] **2. Bull repeatables visible in Redis (3 entries)** —
+      `redis-cli zcard bull:markets-aggregator:repeat = 3`.
+- [ ] **3. First `pool_snapshots` row appears within 60s** of process start.
+- [ ] **4. First `daily_pool_aggregates` row appears within 5min** (only if
+      there is `transactions` activity in the window).
+- [ ] **5. `protocol_summary.updated_at` advances every ~30s** (poll twice
+      with a >30s gap; timestamps must differ).
+- [ ] **6. `/realtime` namespace reachable from staging app origin** — JS
+      smoke from `https://app.areal.finance` DevTools console connects
+      without CORS error.
+- [ ] **7. Realtime auth gate behaves per spec** — anonymous `subscribe`
+      to `protocol` returns `{ ok: true }`; anonymous `subscribe` to
+      `wallet:<X>` returns `{ ok: false, error: 'auth_required' }`;
+      JWT-authed `subscribe` to `wallet:<jwt.sub>` returns `{ ok: true }`;
+      JWT-authed `subscribe` to a different `wallet:<other>` returns
+      `{ ok: false, error: 'auth_mismatch' }`.
+- [ ] **8. All new Prometheus metrics present** —
+      `curl -s http://127.0.0.1:9201/metrics | grep -E '^(aggregator|realtime)_'`
+      shows the six new series.
+- [ ] **9. Multi-replica safety verified** — a second backend replica
+      against the same Postgres + Redis runs cleanly; within 5 min the
+      `aggregator_skip_total` counter is non-zero on at least one of the
+      two processes (proving the advisory-lock skip path fires).
+- [ ] **10. Alert rules loaded + green on the Alertmanager dashboard** —
+      `AggregatorSnapshotSlow`, `BullMarketsAggregatorBacklog`,
+      `AggregatorRpcFailures` all in `Inactive` state with no firing
+      events.
+
+Rollback:
+1. `migration:revert` (drops the 3 tables; Bull repeatables remain harmless
+   in Redis — the consumer is removed from DI so they never fire).
+2. Redeploy previous artifact.
+3. Optionally clean Bull repeatables:
+   ```bash
+   redis-cli del bull:markets-aggregator:repeat bull:markets-aggregator:delayed
+   ```

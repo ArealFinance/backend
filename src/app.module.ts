@@ -6,10 +6,14 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { SolanaConnectionModule } from './common/solana/connection.module.js';
 import configuration from './config/configuration.js';
 import { ClaimHistory } from './entities/claim-history.entity.js';
+import { DailyPoolAggregate } from './entities/daily-pool-aggregate.entity.js';
 import { Event } from './entities/event.entity.js';
 import { LpPositionHistory } from './entities/lp-position-history.entity.js';
+import { PoolSnapshot } from './entities/pool-snapshot.entity.js';
+import { ProtocolSummary } from './entities/protocol-summary.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { RevenueDistribution } from './entities/revenue-distribution.entity.js';
 import { Transaction } from './entities/transaction.entity.js';
@@ -19,7 +23,9 @@ import { HealthModule } from './modules/health/health.module.js';
 import { IndexerModule } from './modules/indexer/indexer.module.js';
 import { MetricsModule } from './modules/metrics/metrics.module.js';
 import { PortfolioModule } from './modules/portfolio/portfolio.module.js';
+import { MarketsModule } from './modules/markets/markets.module.js';
 import { ProjectionsModule } from './modules/projections/projections.module.js';
+import { RealtimeModule } from './modules/realtime/realtime.module.js';
 import { TransactionsModule } from './modules/transactions/transactions.module.js';
 
 /**
@@ -66,6 +72,9 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
             ClaimHistory,
             RevenueDistribution,
             LpPositionHistory,
+            PoolSnapshot,
+            DailyPoolAggregate,
+            ProtocolSummary,
           ],
           migrations: [],
           ssl: wantsSsl ? { rejectUnauthorized: false } : false,
@@ -87,6 +96,7 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
         limit: 60, // 60 req / min per IP — tighten per route as needed.
       },
     ]),
+    SolanaConnectionModule,
     AuthModule,
     IndexerModule,
     HealthModule,
@@ -94,6 +104,8 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
     ProjectionsModule,
     TransactionsModule,
     PortfolioModule,
+    RealtimeModule,
+    MarketsModule,
   ],
   providers: [
     // Apply ThrottlerGuard globally so every controller route gets rate-limited

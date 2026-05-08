@@ -20,6 +20,7 @@ import { IsNull, LessThan, Repository } from 'typeorm';
 import { RefreshToken } from '../../entities/refresh-token.entity.js';
 import { User } from '../../entities/user.entity.js';
 import { MetricsService } from '../metrics/metrics.service.js';
+import { JWT_AUDIENCE, JWT_ISSUER } from './auth.module.js';
 import { AuthResponseDto } from './dto/auth-response.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import { AUTH_REDIS } from './redis.provider.js';
@@ -393,6 +394,12 @@ export class AuthService {
       // and rely on `parseTtlSeconds`'s grammar check elsewhere to surface bad
       // values during local dev.
       expiresIn: (this.config.get<string>('jwt.expiresIn') ?? '7d') as `${number}d`,
+      // R-12.3.1-7: pin iss + aud explicitly here too. The module-level
+      // signOptions already carry these, but `JwtService.sign` overrides
+      // module defaults when an options arg is passed — re-stating them
+      // keeps tokens valid against the strict verifier on the other side.
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
     });
 
     const refreshTtlSecs = this.parseTtlSeconds(
