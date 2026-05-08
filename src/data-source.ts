@@ -18,6 +18,7 @@ import { Event } from './entities/event.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { User } from './entities/user.entity.js';
 import { InitSchema0001 } from './migrations/0001-init.js';
+import { FixEventUniqueness0002 } from './migrations/0002-fix-event-uniqueness.js';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -28,6 +29,6 @@ export default new DataSource({
   synchronize: false,
   logging: process.env.TYPEORM_LOGGING === 'true',
   entities: [Event, User, RefreshToken],
-  migrations: [InitSchema0001],
+  migrations: [InitSchema0001, FixEventUniqueness0002],
   migrationsTableName: 'typeorm_migrations',
 });

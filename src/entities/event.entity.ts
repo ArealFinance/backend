@@ -26,7 +26,14 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Unique
  *     All nullable because not every event references all three.
  */
 @Entity({ schema: 'areal', name: 'events' })
-@Unique('uq_events_signature_log_index', ['signature', 'logIndex'])
+// Uniqueness is per (signature, program_id, log_index): the same Solana
+// transaction can `invoke` two Areal programs in separate CPIs, each emitting
+// its own 0-indexed event stream (DecoderService numbers events per-program).
+// The original 2-tuple key would collide on multi-program transactions and
+// silently drop the second program's events on UPSERT — a correctness bug
+// for nexus → yield-distribution and ownership-token → yield-distribution
+// flows where two events legitimately share log_index 0 within one tx.
+@Unique('uq_events_signature_program_log_index', ['signature', 'programId', 'logIndex'])
 @Index('idx_events_program_event_time', ['programId', 'eventName', 'blockTime'])
 @Index('idx_events_actor_time', ['primaryActor', 'blockTime'])
 @Index('idx_events_pool_time', ['pool', 'blockTime'])

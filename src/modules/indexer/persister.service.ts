@@ -8,9 +8,15 @@ import type { DecodedEvent } from './decoder.service.js';
 /**
  * Idempotent persister for raw chain events.
  *
- * The unique constraint `(signature, log_index)` is the de-dupe key, so we
- * UPSERT and do nothing on conflict. This is the single point where chain
- * data lands in our DB; downstream projections read FROM `events`.
+ * The unique constraint `(signature, program_id, log_index)` is the de-dupe
+ * key, so we UPSERT and do nothing on conflict. We include `program_id` in
+ * the key because multi-program transactions (CPI from one Areal program
+ * into another) emit independent per-program log streams — each with its
+ * own 0-indexed `log_index`. A 2-tuple key would silently drop the second
+ * program's events on conflict.
+ *
+ * This is the single point where chain data lands in our DB; downstream
+ * projections read FROM `events`.
  *
  * Field-extraction notes:
  *   The IDL field names are snake_case (Anchor convention). To keep the
@@ -53,7 +59,7 @@ export class PersisterService {
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await this.events.upsert(row as any, {
-        conflictPaths: ['signature', 'logIndex'],
+        conflictPaths: ['signature', 'programId', 'logIndex'],
         skipUpdateIfNoValuesChanged: true,
       });
     } catch (err) {
