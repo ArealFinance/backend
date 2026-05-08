@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 import {
   ForbiddenException,
@@ -42,9 +42,18 @@ import type { JwtPayload } from './strategies/jwt.strategy.js';
  *      d. upserts the `users` row, issues a JWT + opaque refresh token.
  *
  * Refresh flow:
- *   - Client presents the raw refresh token. Server hashes it (sha256) and
- *     looks up by hash. If row exists, not revoked, not expired → mint a new
- *     access+refresh pair, mark the presented token revoked (rotation).
+ *   - Client presents the raw refresh token. Server HMAC-SHA-256-hashes it
+ *     under `JWT_REFRESH_SECRET` and looks up by hash. If row exists, not
+ *     revoked, not expired → mint a new access+refresh pair, mark the
+ *     presented token revoked (rotation).
+ *
+ * Why HMAC over plain SHA-256:
+ *   - A leaked DB now also requires the secret to mint refreshes — without
+ *     the secret the attacker has hashes that hash() to themselves, but
+ *     can't compute the corresponding raw token to present.
+ *   - Pure SHA-256 over an opaque random token is already collision/preimage
+ *     resistant; the HMAC step adds a rotation knob (rotate
+ *     JWT_REFRESH_SECRET → instantly invalidates every existing token).
  *
  * NEVER persist the raw refresh token. NEVER log the signature or refresh
  * token bodies.
@@ -420,8 +429,24 @@ export class AuthService {
     return randomBytes(48).toString('base64url');
   }
 
+  /**
+   * HMAC-SHA-256 over the raw refresh token, keyed by JWT_REFRESH_SECRET.
+   * Returns a 64-char lowercase hex string — fits inside a varchar(64) column
+   * (see migration 0003).
+   *
+   * If the secret is missing the method THROWS rather than silently falling
+   * back to plain SHA-256 — silent fallback would mean a misconfigured prod
+   * accepts pre-secret-rotation tokens forever, which defeats the whole
+   * point. Surface the misconfig at boot/first-request instead.
+   */
   private hashToken(raw: string): string {
-    return createHash('sha256').update(raw).digest('hex');
+    const secret = this.config.get<string>('jwt.refreshSecret');
+    if (!secret) {
+      throw new Error(
+        'JWT_REFRESH_SECRET is not configured — refresh-token HMAC requires it. Set it in env and restart.',
+      );
+    }
+    return createHmac('sha256', secret).update(raw).digest('hex');
   }
 
   /**
