@@ -79,8 +79,15 @@ async function bootstrap() {
     swaggerOptions: { persistAuthorization: true },
   });
 
+  // Bind host: in container, must be 0.0.0.0 so Docker port-mapping
+  // (which routes from host's 127.0.0.1 → container) can reach the listener.
+  // Container's loopback is unreachable from outside the container, so
+  // production security comes from `127.0.0.1:3010:3010` in compose
+  // (host-side bind to loopback only).
+  // For bare-metal / non-container dev: HOST=127.0.0.1 explicitly restricts.
   const port = parseInt(process.env.PORT ?? '3010', 10);
-  await app.listen(port, '127.0.0.1');
+  const host = process.env.HOST ?? '0.0.0.0';
+  await app.listen(port, host);
 
   // -- separate metrics listener (localhost-only) -------------------------
   // Resolve the main app's MetricsService and hand it to a second Nest app
@@ -92,8 +99,11 @@ async function bootstrap() {
   const metricsApp = await NestFactory.create(MetricsAppModule.forRoot(sharedMetrics), {
     logger: ['log', 'error', 'warn'],
   });
+  // Same reasoning as the main listener: bind 0.0.0.0 so Docker port-mapping
+  // works; host-side compose bind `127.0.0.1:9201:9201` enforces locality.
   const metricsPort = parseInt(process.env.METRICS_PORT ?? '9201', 10);
-  await metricsApp.listen(metricsPort, '127.0.0.1');
+  const metricsHost = process.env.METRICS_HOST ?? '0.0.0.0';
+  await metricsApp.listen(metricsPort, metricsHost);
 
   // eslint-disable-next-line no-console
   console.log(`Areal backend listening on http://127.0.0.1:${port} (docs: /api/docs)`);
