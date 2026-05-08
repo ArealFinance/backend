@@ -19,16 +19,30 @@ export class LoginDto {
   })
   @IsString()
   @IsNotEmpty()
+  // Solana pubkeys are 32 bytes → 43-44 base58 chars in practice. We
+  // accept 32-44 to keep theoretical edge cases (leading-zero-byte keys
+  // that base58-shorten) from being rejected, but the regex itself
+  // restricts the alphabet to base58 (excludes 0/O/I/l). Tighter than
+  // 32-44 would risk false negatives without meaningfully narrowing the
+  // attack surface — `canonicaliseWallet` in AuthService re-parses with
+  // `new PublicKey()` which is the actual gatekeeper.
   @Matches(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, {
     message: 'wallet must be a valid base58 Solana pubkey',
   })
   wallet!: string;
 
+  // ed25519 signatures are 64 bytes → 86-88 base58 chars. The previous
+  // 64-128 band was loose enough to admit ~50% bogus payloads to the
+  // expensive verification path; 86-90 keeps a small headroom for any
+  // base58-encoder quirk while still rejecting obvious junk before the
+  // ed25519 verifier sees it. The verifier itself rechecks the byte
+  // length (`!== nacl.sign.signatureLength`) so this DTO bound is purely
+  // a cheap pre-filter.
   @ApiProperty({ description: 'ed25519 signature of `message`, base58-encoded' })
   @IsString()
   @IsNotEmpty()
-  @MinLength(64)
-  @MaxLength(128)
+  @MinLength(86)
+  @MaxLength(90)
   signature!: string;
 
   @ApiProperty({
