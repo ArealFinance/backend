@@ -165,16 +165,37 @@ groups:
 
 ## Operational checklist
 
-Post-deploy:
-- [ ] `migration:run` succeeded
-- [ ] Bull repeatables visible in Redis (3 entries)
-- [ ] First `pool_snapshots` row appears within 60s
-- [ ] First `daily_pool_aggregates` row appears within 5min (only if there
-      is `transactions` activity in the window)
-- [ ] `protocol_summary.updated_at` advances every ~30s
-- [ ] `/realtime` namespace reachable from staging app origin
-- [ ] All new Prometheus metrics present
-- [ ] Alert rules loaded + green on the Alertmanager dashboard
+Post-deploy (10 gates — all must be GREEN before traffic ramp):
+- [ ] **1. `migration:run` succeeded** — `0005-markets-aggregates` applied;
+      `SELECT * FROM areal.protocol_summary` returns exactly one row with
+      `id='singleton'`.
+- [ ] **2. Bull repeatables visible in Redis (3 entries)** —
+      `redis-cli zcard bull:markets-aggregator:repeat = 3`.
+- [ ] **3. First `pool_snapshots` row appears within 60s** of process start.
+- [ ] **4. First `daily_pool_aggregates` row appears within 5min** (only if
+      there is `transactions` activity in the window).
+- [ ] **5. `protocol_summary.updated_at` advances every ~30s** (poll twice
+      with a >30s gap; timestamps must differ).
+- [ ] **6. `/realtime` namespace reachable from staging app origin** — JS
+      smoke from `https://app.areal.finance` DevTools console connects
+      without CORS error.
+- [ ] **7. Realtime auth gate behaves per spec** — anonymous `subscribe`
+      to `protocol` returns `{ ok: true }`; anonymous `subscribe` to
+      `wallet:<X>` returns `{ ok: false, error: 'auth_required' }`;
+      JWT-authed `subscribe` to `wallet:<jwt.sub>` returns `{ ok: true }`;
+      JWT-authed `subscribe` to a different `wallet:<other>` returns
+      `{ ok: false, error: 'auth_mismatch' }`.
+- [ ] **8. All new Prometheus metrics present** —
+      `curl -s http://127.0.0.1:9201/metrics | grep -E '^(aggregator|realtime)_'`
+      shows the six new series.
+- [ ] **9. Multi-replica safety verified** — a second backend replica
+      against the same Postgres + Redis runs cleanly; within 5 min the
+      `aggregator_skip_total` counter is non-zero on at least one of the
+      two processes (proving the advisory-lock skip path fires).
+- [ ] **10. Alert rules loaded + green on the Alertmanager dashboard** —
+      `AggregatorSnapshotSlow`, `BullMarketsAggregatorBacklog`,
+      `AggregatorRpcFailures` all in `Inactive` state with no firing
+      events.
 
 Rollback:
 1. `migration:revert` (drops the 3 tables; Bull repeatables remain harmless

@@ -201,6 +201,45 @@ For graceful degradation: if the WS connection has been disconnected for
 the gap. The realtime stream is an optimisation, NOT the source of truth —
 all state can be reconstructed from the REST aggregate tables.
 
+## Companion REST surface (`/markets/*`)
+
+The realtime channel is paired with three public REST endpoints that the
+SDK 12.3.2 implementer MUST consume for backfill / initial render. The
+endpoints are derived from the same aggregate tables emitted on the
+realtime channels.
+
+### Pagination contract
+
+`/markets/pools/:pool/snapshots` uses **time-window pagination**, NOT
+opaque cursor pagination (the `/transactions` endpoint from Phase 12.2
+uses cursors; snapshots intentionally diverge — see Phase 12.3.1
+Decision #5 in the integration plan). Rationale: snapshots are an
+equidistant 60s time-series; UIs naturally want time-range queries
+("last 24h", "last 7d"), not next-N-after-signature.
+
+| Endpoint | Query params | Default | Cap |
+|----------|--------------|---------|-----|
+| `GET /markets/pools/:pool/snapshots` | `from` (unix seconds, inclusive), `to` (unix seconds, inclusive), `limit` | `limit=100` | `limit ∈ [1, 200]`; absent `from`/`to` returns the most recent `limit` rows |
+| `GET /markets/pools/:pool/aggregate` | `days` | `days=7` | `days ∈ [1, 90]` |
+| `GET /markets/summary` | — | — | — (singleton row) |
+
+### Response shapes
+
+- `GET /markets/pools/:pool/snapshots` → `{ items: SnapshotRow[] }` ordered
+  by `block_time DESC`. Note: `block_time` is the cron's wall-clock at
+  job execution, NOT a Solana slot timestamp — adequate for charting,
+  not for on-chain reconciliation.
+- `GET /markets/pools/:pool/aggregate` → `{ items: DailyAggregate[] }`
+  ordered by `day ASC`. `apy_24h` is currently always `null` (reserved
+  field — see entity comment).
+- `GET /markets/summary` → `ProtocolSummary` (single object). Returns 404
+  if the singleton row is somehow missing (should be impossible after
+  migration `0005`).
+
+All three endpoints are **public-read** (no JWT). They are rate-limited by
+the global Throttler envelope (60 req/min/IP). The SDK client should NOT
+attach `Authorization` headers — surface remains anonymous-callable.
+
 ## Versioning
 
 The `/realtime` namespace is currently un-versioned. Breaking changes

@@ -11,8 +11,12 @@ import { Column, Entity, Index, PrimaryGeneratedColumn, Unique, UpdateDateColumn
  *   - `tx_count_24h` is `COUNT(*)` over `transactions` for the pool/day window.
  *   - `unique_wallets_24h` is `COUNT(DISTINCT wallet)` — a known scaling cliff
  *     past ~10M tx/day, but acceptable for v1 (R-ticket noted).
- *   - `apy_24h` derived as `fees_usd_24h / tvl_usd * 365` from the latest
- *     pool snapshot at job time. nullable when TVL is unpriceable.
+ *   - `apy_24h` is currently a RESERVED FIELD — written as NULL by the
+ *     5min rollup. The intended derivation `fees_usd_24h / tvl_usd * 365`
+ *     requires (a) USD-denominated fees per swap (Phase 12.2 swap projector
+ *     stores native units only, not priced) and (b) a USD price oracle —
+ *     neither shipped in Phase 12.x backend. Tracked as a follow-up
+ *     R-ticket; UI will render "—" until it lands.
  *
  * Idempotency: `(pool, day)` UNIQUE — re-running the job overwrites the
  * row in place. The `updated_at` timestamp records the last refresh so

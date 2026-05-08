@@ -4,11 +4,16 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 
  * Per-pool periodic snapshot (Phase 12.3.1 — markets aggregates).
  *
  * One row per `(pool, block_time)`. Inserted by the 60s `snapshotPools60s`
- * cron job which reads on-chain pool state via the SDK markets reader. The
- * combination of `block_time` (Solana slot wall-clock) and the periodic
- * cadence keeps us deterministic across restarts — re-running the job at
- * the same slot produces an identical row, and the index `(pool, block_time DESC)`
- * makes "latest snapshot for pool X" an index-only point lookup.
+ * cron job which reads on-chain pool state via the SDK markets reader.
+ *
+ * `block_time` is the cron's own wall-clock at job execution (best-effort,
+ * ~60s granularity) — NOT the Solana slot wall-clock. The SDK markets
+ * reader does not currently roundtrip a per-pool slot timestamp; we
+ * surface the cron clock as a pragmatic stand-in. Adequate for time-series
+ * visualisation (`(pool, block_time DESC)` index makes "latest snapshot
+ * for pool X" an index-only point lookup), but NOT suitable for on-chain
+ * reconciliation by slot. If slot-precise time becomes a requirement,
+ * surface it via the SDK reader and migrate this column.
  *
  * Numeric storage:
  *   - Reserves / TVL in token base units use `numeric(40,0)` (wide enough

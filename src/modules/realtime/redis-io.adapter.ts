@@ -17,9 +17,9 @@ import { REALTIME_ALLOWED_ORIGINS } from './realtime.gateway.js';
  *
  * Single-node deployments still benefit from running through this adapter
  * (it's a no-op extra Redis trip but keeps the code path identical to
- * production). For production we'd add `key: 'areal-realtime'` to
- * namespace the pub/sub channel — defaults to `socket.io` which is fine
- * given our dedicated Redis DB index.
+ * production). The pub/sub channel is namespaced via `key: 'areal-realtime'`
+ * to avoid cross-talk if Redis is ever shared with another Socket.IO
+ * service (defence-in-depth — Phase 12.3.1 security review LOW closure).
  */
 export class RealtimeRedisIoAdapter extends IoAdapter {
   private readonly logger = new Logger(RealtimeRedisIoAdapter.name);
@@ -52,7 +52,7 @@ export class RealtimeRedisIoAdapter extends IoAdapter {
       const sub = pub.duplicate();
       this.pub = pub;
       this.sub = sub;
-      this.adapterCtor = createAdapter(pub, sub);
+      this.adapterCtor = createAdapter(pub, sub, { key: 'areal-realtime' });
     } catch (err) {
       this.logger.error(
         `redis adapter init failed: ${err instanceof Error ? err.message : String(err)}`,

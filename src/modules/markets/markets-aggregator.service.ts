@@ -22,11 +22,12 @@ import { RealtimeService } from '../realtime/realtime.service.js';
 /**
  * Postgres advisory-lock IDs for the three aggregator jobs.
  *
- * The locks are session-level via `pg_try_advisory_xact_lock` — held only
- * for the lifetime of the wrapping transaction. Two replicas hitting the
- * same job at the same minute will see one acquire the lock and run, the
- * other return false from `pg_try_advisory_xact_lock` and skip silently
- * (incrementing `aggregator_skip_total`).
+ * The locks are transaction-level via `pg_try_advisory_xact_lock` —
+ * auto-released at COMMIT/ROLLBACK of the wrapping transaction; no manual
+ * unlock needed and exception paths are safe by construction. Two replicas
+ * hitting the same job at the same minute will see one acquire the lock
+ * and run, the other return false from `pg_try_advisory_xact_lock` and
+ * skip silently (incrementing `aggregator_skip_total`).
  *
  * Magic numbers chosen at random within the bigint advisory-lock space —
  * never reuse across unrelated locks. The 0x12303001 prefix encodes the
