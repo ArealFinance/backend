@@ -133,9 +133,17 @@ New metrics scraped on the existing `/metrics` listener
 | `aggregator_skip_total`             | Counter   | `job`         |
 | `aggregator_rpc_failures_total`     | Counter   | `job`         |
 | `realtime_connections_total`        | Counter   | —             |
+| `realtime_connections_active`       | Gauge     | —             |
 | `realtime_emits_total`              | Counter   | `channel`     |
 | `realtime_subscriptions_total`      | Counter   | `room_type`, `outcome` |
 | `realtime_handshake_rejected_total` | Counter   | `reason`      |
+
+`realtime_connections_total` is the cumulative-since-boot connect counter
+(use with `rate()` for connect-rate alerting). `realtime_connections_active`
+is a Gauge that increments on connect and decrements on disconnect — read
+it directly to see the currently-live socket count. Together they answer
+"how fast are people connecting" AND "how many are connected right now"
+without one metric trying to do both jobs.
 
 Verification:
 ```bash

@@ -102,13 +102,29 @@ export class MetricsService implements OnModuleInit {
   });
 
   /**
-   * Total Socket.IO connections accepted. Includes both authenticated
-   * (with JWT) and anonymous connections — anonymity is allowed for
-   * public rooms (`protocol`, `pool:*`).
+   * Cumulative Socket.IO connections accepted since process start.
+   * Increments only — useful for connect-rate alerting via PromQL `rate()`.
+   * Includes both authenticated (with JWT) and anonymous connections —
+   * anonymity is allowed for public rooms (`protocol`, `pool:*`).
+   *
+   * Pair with `realtimeConnectionsActive` (Gauge) for "how many sockets
+   * are LIVE right now" — the Counter alone can't answer that question
+   * because it never decrements.
    */
-  readonly realtimeConnections = new Counter({
+  readonly realtimeConnectionsTotal = new Counter({
     name: 'realtime_connections_total',
-    help: 'Socket.IO connections accepted',
+    help: 'Socket.IO connections accepted (cumulative since process start)',
+  });
+
+  /**
+   * Currently active Socket.IO connections. Increments on `handleConnection`
+   * (after the throttle gate passes) and decrements on `handleDisconnect`.
+   * Read directly to answer "how many sockets are live right now" without
+   * relying on a `rate()`-derived cumulative metric.
+   */
+  readonly realtimeConnectionsActive = new Gauge({
+    name: 'realtime_connections_active',
+    help: 'Socket.IO connections currently live',
   });
 
   /**
@@ -173,7 +189,8 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.aggregatorLatency);
     this.registry.registerMetric(this.aggregatorSkipTotal);
     this.registry.registerMetric(this.aggregatorRpcFailures);
-    this.registry.registerMetric(this.realtimeConnections);
+    this.registry.registerMetric(this.realtimeConnectionsTotal);
+    this.registry.registerMetric(this.realtimeConnectionsActive);
     this.registry.registerMetric(this.realtimeEmits);
     this.registry.registerMetric(this.realtimeSubscriptions);
     this.registry.registerMetric(this.realtimeHandshakeRejected);

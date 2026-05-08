@@ -4,6 +4,7 @@ import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
+  OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -67,7 +68,7 @@ type Ack = { ok: true } | { ok: false; error: string };
   namespace: '/realtime',
   cors: { origin: REALTIME_ALLOWED_ORIGINS, credentials: true },
 })
-export class RealtimeGateway implements OnGatewayConnection {
+export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(RealtimeGateway.name);
 
   @WebSocketServer()
@@ -121,7 +122,34 @@ export class RealtimeGateway implements OnGatewayConnection {
     } else {
       client.data.wallet = null;
     }
-    this.metrics.realtimeConnections.inc();
+    // Two metrics, two questions:
+    //   - `realtime_connections_total` (Counter) — connect-rate alerting via
+    //     PromQL `rate()`. Cumulative since process start.
+    //   - `realtime_connections_active` (Gauge) — how many sockets are live
+    //     RIGHT NOW. Decrements in `handleDisconnect`.
+    this.metrics.realtimeConnectionsTotal.inc();
+    this.metrics.realtimeConnectionsActive.inc();
+  }
+
+  /**
+   * Decrements the active-connections gauge on socket teardown. Socket.IO
+   * fires `disconnect` for every reason (client navigates away, network
+   * drop, server-side `client.disconnect()`), so the gauge naturally
+   * tracks live count regardless of the disconnect cause. Best-effort —
+   * if the metric throws (corrupted registry?) we swallow rather than
+   * surface as an unhandled rejection on shutdown.
+   */
+  handleDisconnect(client: Socket): void {
+    void client; // satisfies the framework signature; we don't read it.
+    try {
+      this.metrics.realtimeConnectionsActive.dec();
+    } catch (err) {
+      this.logger.warn(
+        `handleDisconnect: failed to decrement gauge — ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**
