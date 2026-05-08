@@ -22,6 +22,8 @@
     "migration:generate": "node --loader ts-node/esm ./node_modules/typeorm/cli.js migration:generate -d src/data-source.ts",
     "migration:run": "node --loader ts-node/esm ./node_modules/typeorm/cli.js migration:run -d src/data-source.ts",
     "migration:revert": "node --loader ts-node/esm ./node_modules/typeorm/cli.js migration:revert -d src/data-source.ts",
+    "migration:run:prod": "node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js",
+    "migration:revert:prod": "node ./node_modules/typeorm/cli.js migration:revert -d dist/data-source.js",
     "projections:backfill": "node --enable-source-maps dist/cli/projections-backfill.js"
   },
   "dependencies": {
