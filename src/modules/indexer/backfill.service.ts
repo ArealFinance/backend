@@ -64,16 +64,18 @@ export class BackfillService implements OnApplicationBootstrap {
 
   private async backfillProgram(programId: PublicKey): Promise<void> {
     const lookback = this.config.get<number>('indexer.backfillBlocks') ?? 216_000;
+    const maxSignatures = this.config.get<number>('indexer.maxBackfillSignatures') ?? 50_000;
     const currentSlot = await this.conn.getSlot('confirmed');
     const startSlot = Math.max(0, currentSlot - lookback);
 
     this.logger.log(
-      `backfill: ${programId.toBase58()} from slot ${startSlot} (lookback=${lookback})`,
+      `backfill: ${programId.toBase58()} from slot ${startSlot} (lookback=${lookback}, cap=${maxSignatures})`,
     );
 
     let collected = 0;
     let before: string | undefined;
-    while (true) {
+    let capReached = false;
+    outer: while (true) {
       const batch = await this.conn.getSignaturesForAddress(programId, {
         before,
         limit: SIGNATURES_PAGE_LIMIT,
@@ -104,6 +106,16 @@ export class BackfillService implements OnApplicationBootstrap {
           },
         );
         collected += 1;
+        // Cap on per-program backfill. Without this a chatty program (or a
+        // huge BACKFILL_BLOCKS lookback) can balloon the bull queue and the
+        // bookkeeping arrays in this fn — at worst pushing the listener
+        // process into OOM before the drain catches up. When the cap fires
+        // we stop enqueueing and lean on the periodic ReconcileService to
+        // close the remaining gap on subsequent ticks.
+        if (collected >= maxSignatures) {
+          capReached = true;
+          break outer;
+        }
       }
       if (crossed) break;
       if (batch.length < SIGNATURES_PAGE_LIMIT) break;
@@ -111,6 +123,11 @@ export class BackfillService implements OnApplicationBootstrap {
       if (!before) break;
     }
 
+    if (capReached) {
+      this.logger.warn(
+        `backfill: cap reached (${maxSignatures}) for ${programId.toBase58()} — narrow BACKFILL_BLOCKS or run multiple shorter sweeps; reconcile will close the rest`,
+      );
+    }
     this.logger.log(`backfill: enqueued ${collected} signatures for ${programId.toBase58()}`);
   }
 

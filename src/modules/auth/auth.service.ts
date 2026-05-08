@@ -16,6 +16,7 @@ import { IsNull, LessThan, Repository } from 'typeorm';
 
 import { RefreshToken } from '../../entities/refresh-token.entity.js';
 import { User } from '../../entities/user.entity.js';
+import { MetricsService } from '../metrics/metrics.service.js';
 import { AuthResponseDto } from './dto/auth-response.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { JwtPayload } from './strategies/jwt.strategy.js';
@@ -57,6 +58,7 @@ export class AuthService {
   constructor(
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly metrics: MetricsService,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(RefreshToken) private readonly refreshTokens: Repository<RefreshToken>,
   ) {}
@@ -64,15 +66,26 @@ export class AuthService {
   // -- public API -----------------------------------------------------------
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
+    // Reject malformed messages early so the structured-field path below can
+    // assume a successful parse — keeps the per-step rejection labels clean.
+    const parsed = this.verifyMessageStructure(dto.message);
+    if (!parsed) {
+      this.metrics.authFailures.labels({ reason: 'bad_format' }).inc();
+      throw new UnauthorizedException('login message format invalid');
+    }
+
     const wallet = this.canonicaliseWallet(dto.wallet);
 
     if (!this.verifyTimestamp(dto.message)) {
+      this.metrics.authFailures.labels({ reason: 'bad_timestamp' }).inc();
       throw new UnauthorizedException('login message timestamp invalid or out of skew window');
     }
     if (!this.verifyMessageBindsWallet(dto.message, wallet)) {
+      this.metrics.authFailures.labels({ reason: 'bad_wallet_binding' }).inc();
       throw new UnauthorizedException('login message does not bind to the claimed wallet');
     }
     if (!this.verifySignature(wallet, dto.signature, dto.message)) {
+      this.metrics.authFailures.labels({ reason: 'bad_signature' }).inc();
       throw new UnauthorizedException('signature verification failed');
     }
 
@@ -107,9 +120,12 @@ export class AuthService {
           { wallet: reused.wallet, revokedAt: IsNull() },
           { revokedAt: new Date() },
         );
+        this.metrics.authFailures.labels({ reason: 'refresh_reuse' }).inc();
         this.logger.warn(
           `refresh-token REUSE detected for ${reused.wallet} — entire family revoked`,
         );
+      } else {
+        this.metrics.authFailures.labels({ reason: 'refresh_invalid' }).inc();
       }
       throw new UnauthorizedException('refresh token invalid, expired, or revoked');
     }
@@ -119,12 +135,14 @@ export class AuthService {
     const row = await this.refreshTokens.findOne({ where: { tokenHash: hash } });
     if (!row) {
       // Theoretically unreachable — UPDATE just succeeded. Defensive.
+      this.metrics.authFailures.labels({ reason: 'refresh_invalid' }).inc();
       throw new UnauthorizedException('refresh token invalid, expired, or revoked');
     }
 
     // Defence against extremely-long-lived tokens that survived rotation
     // before expiry was enforced — keep the expiry check after rotation.
     if (row.expiresAt.getTime() < Date.now()) {
+      this.metrics.authFailures.labels({ reason: 'refresh_invalid' }).inc();
       throw new UnauthorizedException('refresh token invalid, expired, or revoked');
     }
 

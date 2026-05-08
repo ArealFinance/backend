@@ -1,3 +1,4 @@
+import { Counter } from 'prom-client';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
@@ -13,6 +14,26 @@ import { AuthService } from './auth.service.js';
  * wire them together are integration-tested separately (Phase 12.2).
  */
 
+/**
+ * Build a self-contained MetricsService stub. We don't reuse the real Nest
+ * MetricsService because (a) it touches the global prom-client registry on
+ * module init (collisions across spec files), and (b) the verification
+ * primitives under test never call into metrics — the stub just needs a
+ * `labels(...).inc()`-shaped counter to satisfy DI.
+ */
+function buildMetricsStub(): ConstructorParameters<typeof AuthService>[2] {
+  // `registers: []` keeps the counter out of the global registry so each
+  // spec file (and each test in this file, since vitest may collect them
+  // in parallel) gets a fresh, isolated counter.
+  const noop = new Counter({
+    name: 'auth_failures_test_stub_total',
+    help: 'test stub',
+    labelNames: ['reason'],
+    registers: [],
+  });
+  return { authFailures: noop } as unknown as ConstructorParameters<typeof AuthService>[2];
+}
+
 function buildSubject(): AuthService {
   // Stubs satisfy DI but should never be called by the methods under test.
   // Cast to `unknown as <Type>` to bypass strict type checks for stubs only.
@@ -21,14 +42,15 @@ function buildSubject(): AuthService {
     {
       get: vi.fn().mockReturnValue('stub'),
     } as unknown as ConstructorParameters<typeof AuthService>[1],
-    { upsert: vi.fn() } as unknown as ConstructorParameters<typeof AuthService>[2],
+    buildMetricsStub(),
+    { upsert: vi.fn() } as unknown as ConstructorParameters<typeof AuthService>[3],
     {
       findOne: vi.fn(),
       save: vi.fn(),
       create: vi.fn(),
       delete: vi.fn(),
       update: vi.fn(),
-    } as unknown as ConstructorParameters<typeof AuthService>[3],
+    } as unknown as ConstructorParameters<typeof AuthService>[4],
   );
 }
 

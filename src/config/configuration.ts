@@ -13,6 +13,11 @@ const DEFAULT_PORT = 3010;
 const DEFAULT_BACKFILL_BLOCKS = 216_000; // ~1 day at 400ms slots
 const DEFAULT_RECONCILE_INTERVAL_SECS = 300; // 5 min
 const DEFAULT_MAX_RECONCILE_SIGNATURES = 50_000;
+// Hard ceiling on a single per-program backfill sweep. Without a bound a
+// chatty program + a wide BACKFILL_BLOCKS can OOM the listener while it
+// holds the in-flight signatures + bull payloads. ReconcileService will
+// continue to close any residual gap on its 5-min cron after the cap fires.
+const DEFAULT_MAX_BACKFILL_SIGNATURES = 50_000;
 
 function asInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -75,6 +80,10 @@ export default () => {
       maxReconcileSignatures: asInt(
         process.env.MAX_RECONCILE_SIGNATURES,
         DEFAULT_MAX_RECONCILE_SIGNATURES,
+      ),
+      maxBackfillSignatures: asInt(
+        process.env.MAX_BACKFILL_SIGNATURES,
+        DEFAULT_MAX_BACKFILL_SIGNATURES,
       ),
     },
 
