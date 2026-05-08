@@ -43,6 +43,28 @@ export class MetricsService implements OnModuleInit {
   });
 
   /**
+   * Histogram of per-event projection latency (Phase 12.2.1).
+   * Buckets target sub-millisecond → 1s; alert on p95 > 50ms because the
+   * persister TX wraps every projection inline.
+   */
+  readonly projectionLatency = new Histogram({
+    name: 'areal_projection_latency_seconds',
+    help: 'Projection write latency (seconds) per event',
+    buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1],
+  });
+
+  /**
+   * Counter of projector failures by event name. Surfaces silent regressions
+   * in IDL drift (a renamed field would throw `requireString` and increment
+   * this counter without changing the persisted-events count).
+   */
+  readonly projectionErrors = new Counter({
+    name: 'areal_projection_errors_total',
+    help: 'Projector failures by event name',
+    labelNames: ['event_name'] as const,
+  });
+
+  /**
    * Guards against double-init when the same instance is wired into both the
    * main Nest app and the secondary MetricsAppModule (Phase 12.1 split-listener
    * pattern). Both DI contexts call `onModuleInit` on the shared instance;
@@ -59,5 +81,7 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.queueDepth);
     this.registry.registerMetric(this.persistLatency);
     this.registry.registerMetric(this.authFailures);
+    this.registry.registerMetric(this.projectionLatency);
+    this.registry.registerMetric(this.projectionErrors);
   }
 }
