@@ -27,7 +27,11 @@ export class RefreshToken {
   @Index('idx_refresh_tokens_wallet')
   wallet!: string;
 
-  @Column({ type: 'varchar', length: 128, name: 'token_hash', unique: true })
+  // HMAC-SHA-256(JWT_REFRESH_SECRET, raw_token) → 32 bytes → 64 hex chars.
+  // Kept narrow so the unique index footprint stays small (this index is on
+  // the auth hot path) and so any malformed client input rejects at the DB
+  // layer instead of silently round-tripping. See migration 0003.
+  @Column({ type: 'varchar', length: 64, name: 'token_hash', unique: true })
   tokenHash!: string;
 
   @Column({ type: 'timestamptz', name: 'expires_at' })

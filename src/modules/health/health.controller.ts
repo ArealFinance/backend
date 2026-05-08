@@ -63,9 +63,14 @@ export class HealthController {
       await this.dataSource.query('SELECT 1');
       return { status: 'ok', latencyMs: Date.now() - start };
     } catch (err) {
+      // Internal driver / network details are interesting to operators, not
+      // to anyone hitting /health unauthenticated. Log the raw error and
+      // return a categorised string in production.
+      const raw = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`/health DB probe failed: ${raw}`);
       return {
         status: 'down',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: scrubProbeError(raw),
       };
     }
   }
@@ -78,10 +83,34 @@ export class HealthController {
       await this.conn.getSlot('confirmed');
       return { status: 'ok', latencyMs: Date.now() - start };
     } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`/health RPC probe failed: ${raw}`);
       return {
         status: 'down',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: scrubProbeError(raw),
       };
     }
   }
+}
+
+/**
+ * Map raw probe errors to a tiny set of categorical strings in production.
+ * Outside production we keep the raw message so dev can debug; in production
+ * we never ship driver internals (RPC URLs, connection strings, stack
+ * fragments) to an unauthenticated probe endpoint.
+ *
+ * Categories chosen to be useful for an alerting dashboard while leaking no
+ * implementation detail:
+ *   - 'timeout'      → request didn't complete in time
+ *   - 'auth_failed'  → 401/403 from the upstream
+ *   - 'unreachable'  → everything else (DNS, refused, TLS, 5xx, …)
+ */
+export function scrubProbeError(raw: string): string {
+  if (process.env.NODE_ENV !== 'production') return raw;
+  const lower = raw.toLowerCase();
+  if (lower.includes('timeout') || lower.includes('etimedout')) return 'timeout';
+  if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized')) {
+    return 'auth_failed';
+  }
+  return 'unreachable';
 }

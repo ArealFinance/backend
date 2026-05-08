@@ -105,7 +105,7 @@
 ## Observability
 
 - `/health` — DB + RPC liveness probes (Redis is implicitly healthy if Bull is alive).
-- `/metrics` — Prometheus scrape endpoint with default node metrics + 4 custom vectors (events persisted, queue depth, persist latency, auth failures).
+- `/metrics` — Prometheus scrape endpoint with default node metrics + 4 custom vectors (events persisted, queue depth, persist latency, auth failures). **Bound on a separate `127.0.0.1:9201` Nest listener** — never reachable through the public reverse-proxy / Cloudflared tunnel. See the operator runbook below.
 - Standard Nest `Logger` for app-level logs. Production should ship via stdout to whatever log aggregator the host environment provides.
 
 ## Deployment posture
@@ -116,21 +116,13 @@
 
 ### Operator runbook — `/metrics` exposure
 
-`/metrics` is mounted on the same Nest listener as the public REST surface (port 3010). For Phase 12.1 we did NOT split it onto a dedicated localhost-only port — the operator-side ACL is simpler and covers the same ground.
+`/metrics` runs on a **separate Nest app** bound to `127.0.0.1:9201` — not on the public REST surface. The main API on port 3010 has no `/metrics` route registered. This means:
 
-The Cloudflared (or nginx) config at `api.areal.finance` MUST drop external requests to `/metrics`:
+- The Cloudflared / nginx ACL that previously had to drop `/metrics(/.*)?` from `api.areal.finance` is no longer required (the path now 404s naturally because nothing is mounted on it).
+- Prometheus scrapes `http://127.0.0.1:9201/metrics` directly. From inside the host / docker bridge this is unchanged in cost; from outside the host it's not reachable at all (loopback bind).
+- Override the listener port with `METRICS_PORT` if 9201 collides with another local service.
 
-```yaml
-# cloudflared ingress (.cloudflared/config.yml)
-ingress:
-  - hostname: api.areal.finance
-    path: /metrics(/.*)?
-    service: http_status:404
-  - hostname: api.areal.finance
-    service: http://127.0.0.1:3010
-```
-
-Prometheus scrapes from inside the same host (over the docker bridge) directly to `http://127.0.0.1:3010/metrics`, bypassing Cloudflared. If we ever co-locate Prometheus on a different host, split `/metrics` onto a dedicated `127.0.0.1:9201` listener (a 10-line Nest standalone-app bootstrap inside `main.ts`) — a TODO in the Phase 12.2 hardening tail.
+Both apps share the **same** `MetricsService` instance (the main app's), so counters/gauges incremented by the indexer / auth / persister land in the registry the metrics listener scrapes. See `main.ts` for the dual-bootstrap and `MetricsAppModule.forRoot(sharedMetrics)` for the shared-instance hand-off.
 
 ### Operator runbook — Postgres TLS
 

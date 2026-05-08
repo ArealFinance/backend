@@ -8,6 +8,9 @@
  *     unknown payload fields reject early (prevents mass-assignment).
  *   - Listens on `127.0.0.1` only — production exposure is via reverse proxy
  *     / Cloudflared, never direct internet binding.
+ *   - `/metrics` runs on a SEPARATE Nest app on `127.0.0.1:9201` so the
+ *     Prometheus scrape surface is never reachable through the public
+ *     reverse-proxy / Cloudflared rule that fronts the main API.
  */
 import 'reflect-metadata';
 
@@ -18,6 +21,8 @@ import helmet from 'helmet';
 
 import { AppModule } from './app.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
+import { MetricsAppModule } from './modules/metrics/metrics-app.module.js';
+import { MetricsService } from './modules/metrics/metrics.service.js';
 
 /**
  * Production CORS allow-list. ONLY the public app + ops panel.
@@ -77,8 +82,23 @@ async function bootstrap() {
   const port = parseInt(process.env.PORT ?? '3010', 10);
   await app.listen(port, '127.0.0.1');
 
+  // -- separate metrics listener (localhost-only) -------------------------
+  // Resolve the main app's MetricsService and hand it to a second Nest app
+  // bound to 127.0.0.1:9201. That second app exposes `/metrics` and nothing
+  // else — no auth, no swagger, no indexer. The shared instance keeps
+  // counters/gauges in one process-wide registry; the public API on :3010
+  // never serves `/metrics`.
+  const sharedMetrics = app.get(MetricsService);
+  const metricsApp = await NestFactory.create(MetricsAppModule.forRoot(sharedMetrics), {
+    logger: ['log', 'error', 'warn'],
+  });
+  const metricsPort = parseInt(process.env.METRICS_PORT ?? '9201', 10);
+  await metricsApp.listen(metricsPort, '127.0.0.1');
+
   // eslint-disable-next-line no-console
   console.log(`Areal backend listening on http://127.0.0.1:${port} (docs: /api/docs)`);
+  // eslint-disable-next-line no-console
+  console.log(`Metrics scrape on http://127.0.0.1:${metricsPort}/metrics (localhost-only)`);
 }
 
 bootstrap().catch((err) => {
