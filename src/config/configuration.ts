@@ -33,6 +33,25 @@ function asBool(value: string | undefined, fallback: boolean): boolean {
 export default () => {
   const cluster = (process.env.SOLANA_CLUSTER ?? 'devnet') as SolanaCluster;
 
+  // Fail-fast (R-12.3.1-8): an empty JWT_SECRET / JWT_REFRESH_SECRET would let
+  // the process boot, then `JwtStrategy.validate` / refresh-token HMAC would
+  // throw at the first request. Surface the misconfig at boot instead so a
+  // bad deploy is rejected before traffic ramps. The check lives INSIDE the
+  // factory (not at module load) so dev-tools that import this file for
+  // type-only purposes don't accidentally throw at import time.
+  if (!process.env.JWT_SECRET) {
+    throw new Error(
+      'JWT_SECRET environment variable is required — refusing to boot without it. ' +
+        'Set it in .env / deployment secrets.',
+    );
+  }
+  if (!process.env.JWT_REFRESH_SECRET) {
+    throw new Error(
+      'JWT_REFRESH_SECRET environment variable is required — the refresh-token HMAC ' +
+        'depends on it. Set it in .env / deployment secrets.',
+    );
+  }
+
   return {
     port: asInt(process.env.PORT, DEFAULT_PORT),
     environment: process.env.NODE_ENV ?? 'development',
@@ -49,8 +68,8 @@ export default () => {
     },
 
     jwt: {
-      secret: process.env.JWT_SECRET ?? '',
-      refreshSecret: process.env.JWT_REFRESH_SECRET ?? '',
+      secret: process.env.JWT_SECRET,
+      refreshSecret: process.env.JWT_REFRESH_SECRET,
       expiresIn: process.env.JWT_EXPIRES_IN ?? '7d',
       refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '30d',
     },
