@@ -1,10 +1,17 @@
 # Realtime Protocol — `/realtime` Socket.IO namespace
 
-**Phase 12.3.1 — backend ↔ SDK contract**
+**Phase 12.3.1 — backend ↔ SDK contract — FROZEN 2026-05-08**
 
 This document is the single source of truth for the `/realtime` Socket.IO
 gateway exposed by `@areal/backend`. The Phase 12.3.2 SDK implementer
 reads this file as the contract for `@areal/sdk/realtime`.
+
+**Status:** **FROZEN as of 2026-05-08** (commit pinning Phase 12.3.1 deploy
+to api.areal.finance via bootstrap-fornex.sh + 7 migrations applied + 8
+Prometheus metrics live). Any breaking change here requires either a new
+namespace (`/realtime-v2`) or a coordinated SDK + backend release with a
+feature flag (per the «Versioning» section below). Additive changes (new
+emit channels, new room types) remain non-breaking.
 
 ## Transport
 
