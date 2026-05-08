@@ -17,9 +17,9 @@ import { DataSource } from 'typeorm';
 import { Event } from './entities/event.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { User } from './entities/user.entity.js';
-import { InitSchema0001 } from './migrations/0001-init.js';
-import { FixEventUniqueness0002 } from './migrations/0002-fix-event-uniqueness.js';
-import { TightenRefreshTokenHash0003 } from './migrations/0003-tighten-refresh-token-hash.js';
+import { InitSchema1714780800000 } from './migrations/0001-init.js';
+import { FixEventUniqueness1714867200000 } from './migrations/0002-fix-event-uniqueness.js';
+import { TightenRefreshTokenHash1714953600000 } from './migrations/0003-tighten-refresh-token-hash.js';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -30,6 +30,6 @@ export default new DataSource({
   synchronize: false,
   logging: process.env.TYPEORM_LOGGING === 'true',
   entities: [Event, User, RefreshToken],
-  migrations: [InitSchema0001, FixEventUniqueness0002, TightenRefreshTokenHash0003],
+  migrations: [InitSchema1714780800000, FixEventUniqueness1714867200000, TightenRefreshTokenHash1714953600000],
   migrationsTableName: 'typeorm_migrations',
 });

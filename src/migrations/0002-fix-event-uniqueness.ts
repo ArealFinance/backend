@@ -26,8 +26,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   they would have ALSO violated the old (narrower) one — so this migration
  *   cannot fail on existing data given 0001 was clean.
  */
-export class FixEventUniqueness0002 implements MigrationInterface {
-  name = 'FixEventUniqueness0002';
+export class FixEventUniqueness1714867200000 implements MigrationInterface {
+  name = 'FixEventUniqueness1714867200000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
