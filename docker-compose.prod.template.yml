@@ -1,0 +1,82 @@
+# Production docker-compose template.
+#
+# Copy to `docker-compose.prod.yml` (gitignored) and fill in env values via
+# either an .env file in this directory or a separate secrets manager that
+# materialises ${VAR}s at runtime.
+#
+# Hardening posture:
+#   - All published ports bind to 127.0.0.1 only. Internet exposure is via
+#     a reverse proxy (Cloudflared / nginx) that terminates TLS and applies
+#     ACLs — never bind the backend or DB to 0.0.0.0.
+#   - Postgres + Redis volumes are named (not bind mounts) so the host file
+#     layout doesn't leak into the container.
+#   - The backend container builds from local source — pin to a git sha
+#     in CI before running.
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: areal-postgres
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: areal-redis
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    command: ['redis-server', '--requirepass', '${REDIS_PASSWORD}', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: areal-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${BACKEND_PORT:-3010}:3010'
+    environment:
+      NODE_ENV: production
+      PORT: 3010
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-30d}
+      RPC_URL_MAINNET: ${RPC_URL_MAINNET}
+      RPC_WS_MAINNET: ${RPC_WS_MAINNET}
+      RPC_URL_DEVNET: ${RPC_URL_DEVNET}
+      RPC_WS_DEVNET: ${RPC_WS_DEVNET}
+      SOLANA_CLUSTER: ${SOLANA_CLUSTER:-mainnet}
+      BACKFILL_BLOCKS: ${BACKFILL_BLOCKS:-216000}
+      RECONCILE_INTERVAL_SECS: ${RECONCILE_INTERVAL_SECS:-300}
+
+volumes:
+  postgres-data:
+  redis-data:
