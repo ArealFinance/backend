@@ -7,13 +7,20 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import configuration from './config/configuration.js';
+import { ClaimHistory } from './entities/claim-history.entity.js';
 import { Event } from './entities/event.entity.js';
+import { LpPositionHistory } from './entities/lp-position-history.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
+import { RevenueDistribution } from './entities/revenue-distribution.entity.js';
+import { Transaction } from './entities/transaction.entity.js';
 import { User } from './entities/user.entity.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { IndexerModule } from './modules/indexer/indexer.module.js';
 import { MetricsModule } from './modules/metrics/metrics.module.js';
+import { PortfolioModule } from './modules/portfolio/portfolio.module.js';
+import { ProjectionsModule } from './modules/projections/projections.module.js';
+import { TransactionsModule } from './modules/transactions/transactions.module.js';
 
 /**
  * Root application module.
@@ -51,7 +58,15 @@ import { MetricsModule } from './modules/metrics/metrics.module.js';
           schema: config.get<string>('database.schema'),
           synchronize: config.get<boolean>('database.synchronize'),
           logging: config.get<boolean>('database.logging'),
-          entities: [Event, User, RefreshToken],
+          entities: [
+            Event,
+            User,
+            RefreshToken,
+            Transaction,
+            ClaimHistory,
+            RevenueDistribution,
+            LpPositionHistory,
+          ],
           migrations: [],
           ssl: wantsSsl ? { rejectUnauthorized: false } : false,
         };
@@ -76,6 +91,9 @@ import { MetricsModule } from './modules/metrics/metrics.module.js';
     IndexerModule,
     HealthModule,
     MetricsModule,
+    ProjectionsModule,
+    TransactionsModule,
+    PortfolioModule,
   ],
   providers: [
     // Apply ThrottlerGuard globally so every controller route gets rate-limited
