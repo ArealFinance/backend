@@ -23,6 +23,13 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 
  *   - `lp_supply` is `numeric(40,0)` for u64 LP token supply.
  *   - `fee_growth_a` / `fee_growth_b` use `numeric(40,0)` to mirror the
  *     on-chain fee accumulator units (q64.64 fixed-point, stringified).
+ *   - `price_a_usdc` / `price_b_usdc` (added in migration 0006) are USDC
+ *     per 1 token (the SDK's natural shape) at snapshot time; nullable when
+ *     the token is unpriceable (no direct or chained pool resolved).
+ *   - `decimals_a` / `decimals_b` (added in migration 0006) are the
+ *     on-chain mint decimals for the two sides, captured at snapshot time
+ *     so the 5min rollup doesn't need a fresh RPC roundtrip per pool to
+ *     compute `apy_24h`.
  */
 @Entity({ schema: 'areal', name: 'pool_snapshots' })
 @Index('idx_pool_snapshots_pool_blocktime', ['pool', 'blockTime'])
@@ -59,6 +66,30 @@ export class PoolSnapshot {
 
   @Column({ type: 'numeric', precision: 40, scale: 0, name: 'lp_supply' })
   lpSupply!: string;
+
+  @Column({
+    type: 'numeric',
+    precision: 40,
+    scale: 8,
+    name: 'price_a_usdc',
+    nullable: true,
+  })
+  priceAUsdc!: string | null;
+
+  @Column({
+    type: 'numeric',
+    precision: 40,
+    scale: 8,
+    name: 'price_b_usdc',
+    nullable: true,
+  })
+  priceBUsdc!: string | null;
+
+  @Column({ type: 'smallint', name: 'decimals_a', nullable: true })
+  decimalsA!: number | null;
+
+  @Column({ type: 'smallint', name: 'decimals_b', nullable: true })
+  decimalsB!: number | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

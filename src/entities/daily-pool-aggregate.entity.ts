@@ -11,12 +11,17 @@ import { Column, Entity, Index, PrimaryGeneratedColumn, Unique, UpdateDateColumn
  *   - `tx_count_24h` is `COUNT(*)` over `transactions` for the pool/day window.
  *   - `unique_wallets_24h` is `COUNT(DISTINCT wallet)` — a known scaling cliff
  *     past ~10M tx/day, but acceptable for v1 (R-ticket noted).
- *   - `apy_24h` is currently a RESERVED FIELD — written as NULL by the
- *     5min rollup. The intended derivation `fees_usd_24h / tvl_usd * 365`
- *     requires (a) USD-denominated fees per swap (Phase 12.2 swap projector
- *     stores native units only, not priced) and (b) a USD price oracle —
- *     neither shipped in Phase 12.x backend. Tracked as a follow-up
- *     R-ticket; UI will render "—" until it lands.
+ *   - `apy_24h` is computed at rollup time as
+ *     `(fees_usd_24h / tvl_usd) * 365`, where `fees_usd_24h` is derived
+ *     from `fees_a_24h` / `fees_b_24h` (token base units) using the
+ *     LATEST `pool_snapshots` row's `price_a_usdc` / `price_b_usdc` and
+ *     `decimals_a` / `decimals_b` (captured per-snapshot as of migration
+ *     0006). Stored as a ratio (1.0 = 100% APY). NULL when ANY input
+ *     is unavailable — per-token prices, decimals, OR `tvl_usd` — or
+ *     when `tvl_usd <= 0`. Capped at 1000.0 (i.e. 100,000% APY) to defend
+ *     dashboards against fee-spike-on-tiny-TVL outliers; the cap fires
+ *     so rarely that anything hitting it is almost certainly a real
+ *     anomaly, not legitimate yield.
  *
  * Idempotency: `(pool, day)` UNIQUE — re-running the job overwrites the
  * row in place. The `updated_at` timestamp records the last refresh so

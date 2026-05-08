@@ -17,17 +17,34 @@ Markets aggregates + Socket.IO realtime substrate.
   - `GET /markets/summary`
 - **Socket.IO gateway** on `/realtime` namespace with Redis adapter.
 
-## Migration 0005
+## Migrations 0005 + 0006
 
-Run AFTER deploy, BEFORE traffic ramp:
+Run AFTER deploy, BEFORE traffic ramp. Both apply in sequence:
 
 ```bash
 npm run migration:run
 ```
 
-Verifies:
+`0005-markets-aggregates` creates the three aggregate tables.
+
+`0006-pool-snapshot-prices` (R-12.3.1-1) adds four nullable columns to
+`areal.pool_snapshots`: `price_a_usdc`, `price_b_usdc`, `decimals_a`,
+`decimals_b`. Captured per-snapshot, used by the 5min rollup to compute
+`apy_24h`. **Historical rows from before 0006 will have NULL prices /
+decimals / apy until the next snapshot cycle replaces them — this is
+expected and harmless** (the rollup leaves `apy_24h` NULL for any pool
+where the inputs aren't all present).
+
+Verifies (post-migration):
 - `areal.pool_snapshots`, `areal.daily_pool_aggregates`,
   `areal.protocol_summary` tables exist.
+- `pool_snapshots` has the four new nullable columns:
+  ```sql
+  SELECT column_name FROM information_schema.columns
+   WHERE table_schema = 'areal' AND table_name = 'pool_snapshots'
+     AND column_name IN ('price_a_usdc', 'price_b_usdc', 'decimals_a', 'decimals_b');
+  -- expect: 4 rows
+  ```
 - `protocol_summary` contains exactly one row with `id='singleton'`:
   ```sql
   SELECT count(*), id FROM areal.protocol_summary GROUP BY id;
@@ -41,7 +58,7 @@ Verifies:
 
 Rollback (if needed):
 ```bash
-npm run migration:revert
+npm run migration:revert  # reverts 0006 only — re-run for 0005
 ```
 
 ## Bull repeatable verification

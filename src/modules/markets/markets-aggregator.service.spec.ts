@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { MetricsService } from '../metrics/metrics.service.js';
-import { MarketsAggregatorService } from './markets-aggregator.service.js';
+import { computeApy24h, MarketsAggregatorService } from './markets-aggregator.service.js';
 
 /**
  * Aggregator unit tests. We mock the DataSource transaction wrapper, the
@@ -119,6 +119,8 @@ describe('MarketsAggregatorService', () => {
     it('emits pool_snapshot per pool after a successful chain read', async () => {
       const fakePool = {
         poolAddress: { toBase58: () => 'POOL1111111111111111111111111111' },
+        tokenAMint: { toBase58: () => 'MINTA111111111111111111111111111' },
+        tokenBMint: { toBase58: () => 'MINTB111111111111111111111111111' },
         reserveA: 100n,
         reserveB: 200n,
         tvlUsdc: 42.5,
@@ -150,6 +152,89 @@ describe('MarketsAggregatorService', () => {
         feeGrowthB: '2',
         lpSupply: '1000',
       });
+    });
+
+    it('persists per-token prices + decimals when tokens are in snapshot.tokens', async () => {
+      const fakePool = {
+        poolAddress: { toBase58: () => 'POOL1111111111111111111111111111' },
+        tokenAMint: { toBase58: () => 'MINTA111111111111111111111111111' },
+        tokenBMint: { toBase58: () => 'MINTB111111111111111111111111111' },
+        reserveA: 100n,
+        reserveB: 200n,
+        tvlUsdc: 42.5,
+        rawPool: {
+          cumulativeFeesPerShareA: 1n,
+          cumulativeFeesPerShareB: 2n,
+          totalLpShares: 1000n,
+        },
+      };
+      vi.mocked(getMarketsSnapshot).mockResolvedValueOnce({
+        tokens: [
+          {
+            mint: { toBase58: () => 'MINTA111111111111111111111111111' },
+            decimals: 9,
+            priceUsdc: 1.25,
+          },
+          {
+            mint: { toBase58: () => 'MINTB111111111111111111111111111' },
+            decimals: 6,
+            priceUsdc: 99.5,
+          },
+        ],
+        pools: [fakePool],
+        rwtVault: null,
+        fetchedAt: 0,
+        slot: 0,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const insertedRows: unknown[] = [];
+      const manager = makeFakeManager({ lockResult: true, insertedRows });
+      const svc = makeService(manager);
+      await svc.snapshotPools60s();
+      // The PoolSnapshot row inserted into the repo carries the captured
+      // per-token prices + decimals, ready for the rollup to consume.
+      expect(insertedRows.length).toBe(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = insertedRows[0] as any;
+      expect(row.priceAUsdc).toBe('1.25');
+      expect(row.priceBUsdc).toBe('99.5');
+      expect(row.decimalsA).toBe(9);
+      expect(row.decimalsB).toBe(6);
+    });
+
+    it('persists NULL prices/decimals when a token is missing from snapshot.tokens', async () => {
+      const fakePool = {
+        poolAddress: { toBase58: () => 'POOL1111111111111111111111111111' },
+        tokenAMint: { toBase58: () => 'MINTA111111111111111111111111111' },
+        tokenBMint: { toBase58: () => 'MINTB111111111111111111111111111' },
+        reserveA: 100n,
+        reserveB: 200n,
+        tvlUsdc: null,
+        rawPool: {
+          cumulativeFeesPerShareA: 1n,
+          cumulativeFeesPerShareB: 2n,
+          totalLpShares: 1000n,
+        },
+      };
+      vi.mocked(getMarketsSnapshot).mockResolvedValueOnce({
+        // tokens list is empty — both A and B should land as NULL.
+        tokens: [],
+        pools: [fakePool],
+        rwtVault: null,
+        fetchedAt: 0,
+        slot: 0,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const insertedRows: unknown[] = [];
+      const manager = makeFakeManager({ lockResult: true, insertedRows });
+      const svc = makeService(manager);
+      await svc.snapshotPools60s();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = insertedRows[0] as any;
+      expect(row.priceAUsdc).toBeNull();
+      expect(row.priceBUsdc).toBeNull();
+      expect(row.decimalsA).toBeNull();
+      expect(row.decimalsB).toBeNull();
     });
 
     it('skips work when the advisory lock is held by another worker', async () => {
@@ -233,6 +318,223 @@ describe('MarketsAggregatorService', () => {
         (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO'),
       );
       expect(upsertCalls.length).toBe(0);
+    });
+
+    it('R-12.3.1-1: computes and binds apy_24h from the latest snapshot prices', async () => {
+      // The rollup runs 3 query() calls per pool (after the lock):
+      //   1. SELECT latest pool_snapshots row (price + decimals + tvl)
+      //   2. SELECT existing fees_a_24h / fees_b_24h on the daily aggregate
+      //   3. INSERT … ON CONFLICT DO UPDATE (the upsert)
+      // We override `query` to route by SQL fingerprint and assert the apy
+      // bound at the upsert is the formula's expected value.
+      const lockResult = true;
+      const fakeRepo = {
+        insert: vi.fn(),
+        createQueryBuilder: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          addSelect: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          getRawMany: vi.fn().mockResolvedValue([{ pool: 'POOLA' }]),
+          getRawOne: vi
+            .fn()
+            .mockResolvedValue({ volume_a: '0', volume_b: '0', tx_count: '1', wallets: '1' }),
+        }),
+      };
+      const queryCalls: Array<{ sql: string; params?: unknown[] }> = [];
+      const fakeManager = {
+        getRepository: vi.fn().mockReturnValue(fakeRepo),
+        query: vi.fn().mockImplementation(async (sql: string, params?: unknown[]) => {
+          queryCalls.push({ sql, params });
+          if (sql.includes('pg_try_advisory_xact_lock')) {
+            return [{ locked: lockResult }];
+          }
+          if (sql.includes('FROM "areal"."pool_snapshots"')) {
+            // Return a latest-snapshot row with valid prices/decimals/tvl.
+            return [
+              {
+                price_a_usdc: '2.0',
+                price_b_usdc: '3.0',
+                decimals_a: 9,
+                decimals_b: 6,
+                tvl_usd: '1000',
+              },
+            ];
+          }
+          if (
+            sql.includes('FROM "areal"."daily_pool_aggregates"') &&
+            !sql.includes('INSERT INTO')
+          ) {
+            // Existing fees row. We seed both sides so apy_24h is non-zero.
+            return [{ fees_a_24h: '1000000000', fees_b_24h: '0' }];
+          }
+          // INSERT … ON CONFLICT ...
+          return [];
+        }),
+      };
+      const svc = makeService(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fakeManager as any,
+      );
+      await svc.rollupDailyAggregates5m();
+
+      // Find the UPSERT call and inspect the apy_24h param (last positional
+      // before the timestamp — see the SQL in the service).
+      const upsert = queryCalls.find(
+        (c) => c.sql.includes('INSERT INTO "areal"."daily_pool_aggregates"'),
+      );
+      expect(upsert).toBeTruthy();
+      // Param order matches the service: [pool, day, vA, vB, fA, fB, txCount, wallets, apy]
+      const params = upsert!.params!;
+      const apyParam = params[params.length - 1] as string | null;
+      expect(apyParam).not.toBeNull();
+      // 1e9 fees / 1e9 = 1 token A at $2 = $2 fees_usd. tvl=$1000.
+      // apy = ($2 / $1000) * 365 = 0.73
+      expect(Number(apyParam)).toBeCloseTo(0.73, 4);
+    });
+
+    it('R-12.3.1-1: leaves apy_24h NULL when latest snapshot has no prices', async () => {
+      const fakeRepo = {
+        insert: vi.fn(),
+        createQueryBuilder: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          addSelect: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          getRawMany: vi.fn().mockResolvedValue([{ pool: 'POOLA' }]),
+          getRawOne: vi
+            .fn()
+            .mockResolvedValue({ volume_a: '0', volume_b: '0', tx_count: '1', wallets: '1' }),
+        }),
+      };
+      const queryCalls: Array<{ sql: string; params?: unknown[] }> = [];
+      const fakeManager = {
+        getRepository: vi.fn().mockReturnValue(fakeRepo),
+        query: vi.fn().mockImplementation(async (sql: string, params?: unknown[]) => {
+          queryCalls.push({ sql, params });
+          if (sql.includes('pg_try_advisory_xact_lock')) return [{ locked: true }];
+          if (sql.includes('FROM "areal"."pool_snapshots"')) {
+            // Snapshot exists but prices/decimals are NULL — historical
+            // pre-0006 data, or a pool whose tokens aren't in the markets
+            // reader's token list.
+            return [
+              {
+                price_a_usdc: null,
+                price_b_usdc: null,
+                decimals_a: null,
+                decimals_b: null,
+                tvl_usd: null,
+              },
+            ];
+          }
+          if (
+            sql.includes('FROM "areal"."daily_pool_aggregates"') &&
+            !sql.includes('INSERT INTO')
+          ) {
+            return [{ fees_a_24h: '1000000000', fees_b_24h: '0' }];
+          }
+          return [];
+        }),
+      };
+      const svc = makeService(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fakeManager as any,
+      );
+      await svc.rollupDailyAggregates5m();
+
+      const upsert = queryCalls.find(
+        (c) => c.sql.includes('INSERT INTO "areal"."daily_pool_aggregates"'),
+      );
+      const params = upsert!.params!;
+      const apyParam = params[params.length - 1];
+      // All-or-nothing: any NULL input → apy_24h is NULL.
+      expect(apyParam).toBeNull();
+    });
+  });
+
+  describe('computeApy24h (R-12.3.1-1)', () => {
+    // Pure-function tests against the helper. We exercise the all-or-nothing
+    // input-null contract, the formula's correctness on known values, the
+    // tvl_usd <= 0 guard, and the cap on outliers.
+
+    it('returns null when ANY input is missing (all-or-nothing contract)', () => {
+      const base = {
+        feesA: '1000',
+        feesB: '2000',
+        priceAUsdc: '1.0',
+        priceBUsdc: '50.0',
+        decimalsA: 9,
+        decimalsB: 6,
+        tvlUsd: '10000',
+      };
+      // Each input nulled in turn → null result.
+      expect(computeApy24h({ ...base, priceAUsdc: null })).toBeNull();
+      expect(computeApy24h({ ...base, priceBUsdc: null })).toBeNull();
+      expect(computeApy24h({ ...base, decimalsA: null })).toBeNull();
+      expect(computeApy24h({ ...base, decimalsB: null })).toBeNull();
+      expect(computeApy24h({ ...base, tvlUsd: null })).toBeNull();
+    });
+
+    it('returns null when tvl_usd <= 0', () => {
+      const base = {
+        feesA: '1000',
+        feesB: '2000',
+        priceAUsdc: '1.0',
+        priceBUsdc: '50.0',
+        decimalsA: 9,
+        decimalsB: 6,
+        tvlUsd: '0',
+      };
+      expect(computeApy24h(base)).toBeNull();
+      expect(computeApy24h({ ...base, tvlUsd: '-1' })).toBeNull();
+    });
+
+    it('computes apy_24h correctly when all inputs are present', () => {
+      // 1e9 fees on side A (9 decimals → 1.0 token) at $1 = $1.
+      // 2e6 fees on side B (6 decimals → 2.0 tokens) at $50 = $100.
+      // fees_usd_24h = $101. tvl_usd = $10,000.
+      // apy_24h = ($101 / $10000) * 365 = 3.6865 (i.e. 368.65%).
+      const result = computeApy24h({
+        feesA: '1000000000',
+        feesB: '2000000',
+        priceAUsdc: '1.0',
+        priceBUsdc: '50.0',
+        decimalsA: 9,
+        decimalsB: 6,
+        tvlUsd: '10000',
+      });
+      expect(result).not.toBeNull();
+      expect(Number(result)).toBeCloseTo(3.6865, 4);
+    });
+
+    it('caps the result at APY_24H_CAP_RATIO (1000) on outliers', () => {
+      // $1000 fees / $1 TVL * 365 = 365,000. Cap at 1000.
+      const result = computeApy24h({
+        feesA: '1000000000', // 1.0 token at 9 decimals
+        feesB: '0',
+        priceAUsdc: '1000',
+        priceBUsdc: '0',
+        decimalsA: 9,
+        decimalsB: 6,
+        tvlUsd: '1',
+      });
+      expect(result).not.toBeNull();
+      expect(Number(result)).toBe(1000);
+    });
+
+    it('returns 0 (not null) when fees are zero but inputs are otherwise valid', () => {
+      // Fees=0 → fees_usd=0 → apy=0. Distinct from "missing input" → null.
+      const result = computeApy24h({
+        feesA: '0',
+        feesB: '0',
+        priceAUsdc: '1.0',
+        priceBUsdc: '50.0',
+        decimalsA: 9,
+        decimalsB: 6,
+        tvlUsd: '10000',
+      });
+      expect(result).not.toBeNull();
+      expect(Number(result)).toBe(0);
     });
   });
 

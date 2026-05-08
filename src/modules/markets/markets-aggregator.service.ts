@@ -52,13 +52,29 @@ interface AggregatorState {
 }
 
 /**
+ * Hard cap on `apy_24h` written by the 5min rollup. Stored as a ratio
+ * (1.0 = 100%); 1000.0 = 100,000% APY. The cap exists to defend dashboards
+ * from fee-spike-on-tiny-TVL outliers that would otherwise blow Y-axes
+ * apart — a pool with $1 TVL and a single fat fee can produce numbers in
+ * the millions percent which are technically "correct" but useless. The
+ * cap fires so rarely that anything hitting it is almost certainly a real
+ * anomaly worth investigating, not legitimate yield.
+ */
+const APY_24H_CAP_RATIO = 1000;
+
+/**
  * Markets aggregator (Phase 12.3.1).
  *
  * Three idempotent cron jobs:
  *   - `snapshotPools60s` — read on-chain pool state via SDK markets reader
- *     and append a `pool_snapshots` row per pool (60s cadence).
+ *     and append a `pool_snapshots` row per pool (60s cadence). As of
+ *     R-12.3.1-1 also captures per-token USDC prices + on-chain decimals
+ *     so the rollup job below can compute USD-denominated APY without an
+ *     extra RPC roundtrip.
  *   - `rollupDailyAggregates5m` — UPSERT today's UTC day in
- *     `daily_pool_aggregates` from the last 24h of `transactions` (5min cadence).
+ *     `daily_pool_aggregates` from the last 24h of `transactions` (5min
+ *     cadence). Computes `apy_24h` from the latest `pool_snapshots` row's
+ *     captured prices + decimals; NULL when any input is unavailable.
  *   - `writeProtocolSummary30s` — UPDATE the singleton `protocol_summary`
  *     row from latest pool snapshots + 24h transaction aggregate (30s cadence).
  *
@@ -131,8 +147,23 @@ export class MarketsAggregatorService {
         // use the cron's own clock — alright at 60s granularity.
         const nowSec = Math.floor(Date.now() / 1000);
 
+        // R-12.3.1-1: build a mint → { priceUsdc, decimals } lookup once per
+        // tick so the per-pool loop below is O(1) rather than O(n_tokens).
+        // Tokens missing from the snapshot (rare — happens when a pool
+        // reserves a mint the markets reader doesn't list) get NULL prices
+        // and decimals; the rollup leaves apy_24h NULL in that case.
+        const tokenInfo = new Map<string, { priceUsdc: number | null; decimals: number }>();
+        for (const t of snapshot.tokens) {
+          tokenInfo.set(t.mint.toBase58(), {
+            priceUsdc: t.priceUsdc,
+            decimals: t.decimals,
+          });
+        }
+
         for (const pool of snapshot.pools) {
           const poolKey = pool.poolAddress.toBase58();
+          const aInfo = tokenInfo.get(pool.tokenAMint.toBase58()) ?? null;
+          const bInfo = tokenInfo.get(pool.tokenBMint.toBase58()) ?? null;
           const row: Partial<PoolSnapshot> = {
             pool: poolKey,
             blockTime: String(nowSec),
@@ -144,6 +175,12 @@ export class MarketsAggregatorService {
             feeGrowthA: pool.rawPool.cumulativeFeesPerShareA.toString(),
             feeGrowthB: pool.rawPool.cumulativeFeesPerShareB.toString(),
             lpSupply: pool.rawPool.totalLpShares.toString(),
+            priceAUsdc:
+              aInfo && aInfo.priceUsdc !== null ? aInfo.priceUsdc.toString() : null,
+            priceBUsdc:
+              bInfo && bInfo.priceUsdc !== null ? bInfo.priceUsdc.toString() : null,
+            decimalsA: aInfo ? aInfo.decimals : null,
+            decimalsB: bInfo ? bInfo.decimals : null,
           };
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           await manager.getRepository(PoolSnapshot).insert(row as any);
@@ -227,26 +264,86 @@ export class MarketsAggregatorService {
             wallets: '0',
           };
 
+          // R-12.3.1-1: pull the latest snapshot for the pool to read the
+          // captured per-token prices + decimals + tvl. We do this in a
+          // separate parameterised query (no string interpolation — SQL
+          // injection defence) rather than a CTE join because (a) the
+          // intermediate result is small (1 row), (b) the EXPLAIN plan
+          // is dramatically simpler, and (c) a per-pool roundtrip at 5min
+          // cadence is well within budget.
+          const snapshotRow:
+            | {
+                price_a_usdc: string | null;
+                price_b_usdc: string | null;
+                decimals_a: number | null;
+                decimals_b: number | null;
+                tvl_usd: string | null;
+              }
+            | undefined = (
+            await manager.query(
+              `SELECT "price_a_usdc", "price_b_usdc", "decimals_a", "decimals_b", "tvl_usd"
+               FROM "areal"."pool_snapshots"
+               WHERE "pool" = $1
+               ORDER BY "block_time" DESC
+               LIMIT 1`,
+              [pool],
+            )
+          )[0];
+
+          // Read existing fees from the row we may be UPDATING — `fees_*_24h`
+          // currently isn't sourced from `transactions` (no fee column there;
+          // the swap projector is fee-agnostic, see swap.projector.ts). Future
+          // work will populate them from a chain-side fee accumulator delta.
+          // For now they default to 0; if a manual-write or future job has
+          // populated them we preserve that value rather than clobbering on
+          // each rollup tick.
+          const existingFees:
+            | { fees_a_24h: string | null; fees_b_24h: string | null }
+            | undefined = (
+            await manager.query(
+              `SELECT "fees_a_24h", "fees_b_24h"
+               FROM "areal"."daily_pool_aggregates"
+               WHERE "pool" = $1 AND "day" = $2`,
+              [pool, utcDay],
+            )
+          )[0];
+          const feesA = existingFees?.fees_a_24h ?? '0';
+          const feesB = existingFees?.fees_b_24h ?? '0';
+
+          const apy24h = computeApy24h({
+            feesA,
+            feesB,
+            priceAUsdc: snapshotRow?.price_a_usdc ?? null,
+            priceBUsdc: snapshotRow?.price_b_usdc ?? null,
+            decimalsA: snapshotRow?.decimals_a ?? null,
+            decimalsB: snapshotRow?.decimals_b ?? null,
+            tvlUsd: snapshotRow?.tvl_usd ?? null,
+          });
+
           // INSERT … ON CONFLICT DO UPDATE — TypeORM's `.upsert()` also works
           // but emits a verbose UPDATE clause. Raw SQL keeps the intent obvious.
           await manager.query(
             `INSERT INTO "areal"."daily_pool_aggregates"
               ("pool", "day", "volume_a_24h", "volume_b_24h", "fees_a_24h", "fees_b_24h",
                "tx_count_24h", "unique_wallets_24h", "apy_24h", "updated_at")
-            VALUES ($1, $2, $3, $4, 0, 0, $5, $6, NULL, now())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
             ON CONFLICT ("pool", "day") DO UPDATE SET
               "volume_a_24h" = EXCLUDED."volume_a_24h",
               "volume_b_24h" = EXCLUDED."volume_b_24h",
               "tx_count_24h" = EXCLUDED."tx_count_24h",
               "unique_wallets_24h" = EXCLUDED."unique_wallets_24h",
+              "apy_24h" = EXCLUDED."apy_24h",
               "updated_at" = now()`,
             [
               pool,
               utcDay,
               stats.volume_a ?? '0',
               stats.volume_b ?? '0',
+              feesA,
+              feesB,
               parseInt(stats.tx_count ?? '0', 10),
               parseInt(stats.wallets ?? '0', 10),
+              apy24h,
             ],
           );
         }
@@ -389,4 +486,68 @@ export class MarketsAggregatorService {
   private cluster(): ClusterName {
     return (this.config.get<string>('solana.cluster') ?? 'devnet') as ClusterName;
   }
+}
+
+/**
+ * Computes `apy_24h` (R-12.3.1-1) from raw fee accumulators + per-token
+ * USDC prices + on-chain decimals + USD-denominated TVL.
+ *
+ * All-or-nothing: if ANY input is null/undefined OR `tvl_usd <= 0`, returns
+ * NULL. Stored as a ratio (1.0 = 100%); capped at `APY_24H_CAP_RATIO` to
+ * defend dashboards from fee-spike-on-tiny-TVL outliers.
+ *
+ * Number arithmetic: realistic TVL/fee values fit comfortably below 2^53,
+ * so `Number` is safe at this layer (the upstream `numeric(40,…)` columns
+ * arrive as decimal strings — we parse them once here). Returns the value
+ * as a string-or-null suitable for the `numeric(20,8)` column binding.
+ */
+export function computeApy24h(input: {
+  feesA: string;
+  feesB: string;
+  priceAUsdc: string | null;
+  priceBUsdc: string | null;
+  decimalsA: number | null;
+  decimalsB: number | null;
+  tvlUsd: string | null;
+}): string | null {
+  if (
+    input.priceAUsdc === null ||
+    input.priceBUsdc === null ||
+    input.decimalsA === null ||
+    input.decimalsB === null ||
+    input.tvlUsd === null
+  ) {
+    return null;
+  }
+  const priceA = Number(input.priceAUsdc);
+  const priceB = Number(input.priceBUsdc);
+  const tvlUsd = Number(input.tvlUsd);
+  const decA = Number(input.decimalsA);
+  const decB = Number(input.decimalsB);
+  if (
+    !Number.isFinite(priceA) ||
+    !Number.isFinite(priceB) ||
+    !Number.isFinite(tvlUsd) ||
+    !Number.isFinite(decA) ||
+    !Number.isFinite(decB) ||
+    tvlUsd <= 0
+  ) {
+    return null;
+  }
+  const feesAUnits = Number(input.feesA) / 10 ** decA;
+  const feesBUnits = Number(input.feesB) / 10 ** decB;
+  if (!Number.isFinite(feesAUnits) || !Number.isFinite(feesBUnits)) {
+    return null;
+  }
+  const feesUsd24h = feesAUnits * priceA + feesBUnits * priceB;
+  const apy = (feesUsd24h / tvlUsd) * 365;
+  if (!Number.isFinite(apy) || apy < 0) {
+    // Defensive: a negative APY can only come from negative inputs (which
+    // should never happen for u64-derived bigints), and we don't want to
+    // persist nonsense.
+    return null;
+  }
+  const capped = Math.min(apy, APY_24H_CAP_RATIO);
+  // 8 decimal places matches the `numeric(20,8)` column scale.
+  return capped.toFixed(8);
 }

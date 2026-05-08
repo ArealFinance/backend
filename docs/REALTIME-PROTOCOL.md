@@ -230,8 +230,12 @@ equidistant 60s time-series; UIs naturally want time-range queries
   job execution, NOT a Solana slot timestamp — adequate for charting,
   not for on-chain reconciliation.
 - `GET /markets/pools/:pool/aggregate` → `{ items: DailyAggregate[] }`
-  ordered by `day ASC`. `apy_24h` is currently always `null` (reserved
-  field — see entity comment).
+  ordered by `day ASC`. `apy_24h` is a USD-derived ratio (1.0 = 100%)
+  computed from the latest `pool_snapshots` row's captured prices /
+  decimals via the 5min rollup. `null` when prices are unresolvable
+  (no priceable pool for one or both sides) OR when `tvl_usd` is null
+  / non-positive. Capped at `1000` (i.e. 100,000%) to defend dashboards
+  from fee-spike-on-tiny-TVL outliers.
 - `GET /markets/summary` → `ProtocolSummary` (single object). Returns 404
   if the singleton row is somehow missing (should be impossible after
   migration `0005`).
