@@ -8,6 +8,7 @@ import { RefreshToken } from '../../entities/refresh-token.entity.js';
 import { User } from '../../entities/user.entity.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { authRedisProvider } from './redis.provider.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 
 @Module({
@@ -31,7 +32,7 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, authRedisProvider],
   exports: [AuthService, JwtStrategy, PassportModule],
 })
 export class AuthModule {}

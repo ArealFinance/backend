@@ -51,6 +51,15 @@ function buildSubject(): AuthService {
       delete: vi.fn(),
       update: vi.fn(),
     } as unknown as ConstructorParameters<typeof AuthService>[4],
+    // Redis stub — verification primitives never touch it, but the
+    // constructor needs the slot filled. `get/incr/expire/del` are the
+    // only methods the rate-limiter calls.
+    {
+      get: vi.fn().mockResolvedValue(null),
+      incr: vi.fn().mockResolvedValue(1),
+      expire: vi.fn().mockResolvedValue(1),
+      del: vi.fn().mockResolvedValue(1),
+    } as unknown as ConstructorParameters<typeof AuthService>[5],
   );
 }
 

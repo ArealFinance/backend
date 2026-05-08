@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import {
+  ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -11,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
+import type { Redis } from 'ioredis';
 import nacl from 'tweetnacl';
 import { IsNull, LessThan, Repository } from 'typeorm';
 
@@ -19,6 +22,7 @@ import { User } from '../../entities/user.entity.js';
 import { MetricsService } from '../metrics/metrics.service.js';
 import { AuthResponseDto } from './dto/auth-response.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
+import { AUTH_REDIS } from './redis.provider.js';
 import type { JwtPayload } from './strategies/jwt.strategy.js';
 
 /**
@@ -55,12 +59,30 @@ export class AuthService {
   /** Refresh token TTL, in seconds. Must align with `jwt.refreshExpiresIn`. */
   static readonly REFRESH_TTL_DEFAULT_SECS = 30 * 24 * 60 * 60;
 
+  /**
+   * Per-wallet sliding window. The IP-based throttler (5 req/min on the
+   * `/auth/login` route, see `auth.controller.ts`) bounds anonymous brute
+   * force from a single client; this counter targets distributed attempts
+   * against ONE wallet across many client IPs (rotating proxies, botnets).
+   *
+   * 10 failures in 15 minutes is loose enough that a forgetful user retrying
+   * a few times never trips it, and tight enough that a credential-stuffing
+   * bot that probes the same wallet from 100 IPs hits the wall after a
+   * couple of seconds. The block window doubles as a cooldown that gives
+   * the legit owner a clear "wait 15 min" signal in the UI.
+   */
+  static readonly MAX_FAILURES_PER_WALLET = 10;
+  static readonly FAILURE_WINDOW_SECONDS = 15 * 60;
+  /** Redis key prefix for the per-wallet failure counter. */
+  static readonly FAILURE_KEY_PREFIX = 'auth_failures:';
+
   constructor(
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly metrics: MetricsService,
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(RefreshToken) private readonly refreshTokens: Repository<RefreshToken>,
+    @Inject(AUTH_REDIS) private readonly redis: Redis,
   ) {}
 
   // -- public API -----------------------------------------------------------
@@ -68,6 +90,9 @@ export class AuthService {
   async login(dto: LoginDto): Promise<AuthResponseDto> {
     // Reject malformed messages early so the structured-field path below can
     // assume a successful parse — keeps the per-step rejection labels clean.
+    // The format check runs BEFORE the per-wallet gate because we don't have
+    // a canonicalised wallet to key on yet (and DTO validation already
+    // bounds the wallet field to a base58 shape via @Matches).
     const parsed = this.verifyMessageStructure(dto.message);
     if (!parsed) {
       this.metrics.authFailures.labels({ reason: 'bad_format' }).inc();
@@ -76,21 +101,115 @@ export class AuthService {
 
     const wallet = this.canonicaliseWallet(dto.wallet);
 
+    // Per-wallet sliding window. Triggers BEFORE we run the expensive
+    // crypto verification so a wallet that's already past the threshold
+    // doesn't get to keep burning CPU on signature checks. Returns 403
+    // (not 401) so the client can distinguish "your sig was wrong" from
+    // "this wallet is in cooldown — quit retrying".
+    await this.assertWalletNotBlocked(wallet);
+
     if (!this.verifyTimestamp(dto.message)) {
+      await this.recordWalletFailure(wallet);
       this.metrics.authFailures.labels({ reason: 'bad_timestamp' }).inc();
       throw new UnauthorizedException('login message timestamp invalid or out of skew window');
     }
     if (!this.verifyMessageBindsWallet(dto.message, wallet)) {
+      await this.recordWalletFailure(wallet);
       this.metrics.authFailures.labels({ reason: 'bad_wallet_binding' }).inc();
       throw new UnauthorizedException('login message does not bind to the claimed wallet');
     }
     if (!this.verifySignature(wallet, dto.signature, dto.message)) {
+      await this.recordWalletFailure(wallet);
       this.metrics.authFailures.labels({ reason: 'bad_signature' }).inc();
       throw new UnauthorizedException('signature verification failed');
     }
 
+    // Successful login resets the counter — a legit owner who fat-fingered
+    // a few times shouldn't have a stale counter haunting them.
+    await this.clearWalletFailures(wallet);
     await this.touchUser(wallet);
     return this.issueTokens(wallet);
+  }
+
+  // -- per-wallet sliding window --------------------------------------------
+
+  /**
+   * Throws ForbiddenException if the wallet has hit MAX_FAILURES_PER_WALLET
+   * within the rolling FAILURE_WINDOW_SECONDS window.
+   *
+   * Implementation note: we read the current count and reject; we do NOT
+   * INCR here. Increments happen on each verification failure (see
+   * `recordWalletFailure`). A wallet that is already AT the threshold
+   * still gets an immediate 403 rather than being allowed to hit
+   * threshold+1 — Redis INCR is monotonic so the "already blocked"
+   * branch is the same whether count == threshold or count > threshold.
+   *
+   * Redis errors are logged and swallowed: a Redis outage must NOT
+   * lock everyone out (fail-open on the rate limiter, the real
+   * authentication is still defended by signature verification + the
+   * per-IP throttler in the controller).
+   */
+  private async assertWalletNotBlocked(wallet: string): Promise<void> {
+    try {
+      const raw = await this.redis.get(this.failureKey(wallet));
+      const count = raw ? parseInt(raw, 10) : 0;
+      if (count >= AuthService.MAX_FAILURES_PER_WALLET) {
+        this.metrics.authFailures.labels({ reason: 'wallet_blocked' }).inc();
+        const minutes = Math.ceil(AuthService.FAILURE_WINDOW_SECONDS / 60);
+        throw new ForbiddenException(
+          `Too many failed login attempts for this wallet. Try again in up to ${minutes} minutes.`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof ForbiddenException) throw err;
+      this.logger.warn(
+        `assertWalletNotBlocked: Redis unavailable, failing open — ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Increments the per-wallet failure counter and (re-)arms the TTL on first
+   * write. Best-effort: Redis errors don't surface to the caller — the
+   * primary defence is signature verification, not the rate-limiter.
+   */
+  private async recordWalletFailure(wallet: string): Promise<void> {
+    try {
+      const key = this.failureKey(wallet);
+      const count = await this.redis.incr(key);
+      if (count === 1) {
+        // Only set TTL on the first increment of the window so the window
+        // is genuinely sliding from the first failure rather than being
+        // refreshed on every subsequent failure (which would let a slow,
+        // steady probe hang on indefinitely).
+        await this.redis.expire(key, AuthService.FAILURE_WINDOW_SECONDS);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `recordWalletFailure: Redis unavailable — ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /** Reset on success — legit owner who fumbled a few sigs deserves a clean slate. */
+  private async clearWalletFailures(wallet: string): Promise<void> {
+    try {
+      await this.redis.del(this.failureKey(wallet));
+    } catch (err) {
+      this.logger.warn(
+        `clearWalletFailures: Redis unavailable — ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private failureKey(wallet: string): string {
+    return `${AuthService.FAILURE_KEY_PREFIX}${wallet}`;
   }
 
   async refresh(presentedToken: string): Promise<AuthResponseDto> {
