@@ -116,7 +116,7 @@
 
 ## Decisions worth flagging
 
-- **CommonJS, not ESM.** The spec called for ESM, but Nest 10 + TypeORM CLI + decorators are smoother on CommonJS. Switching to ESM later is straightforward — the only ESM-specific syntax we'd add is import attributes for JSON.
+- **ESM, not CommonJS.** `package.json` declares `"type": "module"` and every internal import carries an explicit `.js` extension. Two transitive deps forced our hand: `bs58@6` (ESM-only since v6) and `@areal/sdk` (`"type": "module"` end-to-end). Going CommonJS would have meant pinning both back, which is a non-starter given the SDK is the source of truth for IDLs and program IDs. The TypeORM CLI is invoked via `node --loader ts-node/esm` (see the `migration:*` scripts in `package.json`); decorators work fine under ESM provided `reflect-metadata` is imported once at `main.ts` and `data-source.ts`.
 - **One process holds everything.** Listener + worker + REST + metrics in one Node process for Phase 12.1. When we split (likely Phase 12.3 once Socket.IO lands) the worker container will pull from the same Bull queue.
 - **No projections yet.** The `events` table is the only ingest target. Phases 12.2 / 12.3 introduce per-feature projection tables (transactions, pool_snapshots, leaderboards, etc.) populated by per-event handlers reading from `events`.
 - **Redis is unauthenticated in dev.** `docker-compose.yml` runs Redis without `requirepass` — fine for localhost. The prod template adds `--requirepass`.

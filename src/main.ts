@@ -19,9 +19,22 @@ import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 
-const ALLOWED_ORIGINS = [
-  'https://app.areal.finance',
-  'https://panel.areal.finance',
+/**
+ * Production CORS allow-list. ONLY the public app + ops panel.
+ *
+ * `localhost:*` is intentionally absent — production deployments must not
+ * accept cross-origin requests from a developer laptop, even if the laptop
+ * is on the same network. Add new prod origins here and redeploy; a missing
+ * entry surfaces as a CORS 4xx on the client, not a silent allow.
+ */
+const PROD_ALLOWED_ORIGINS = ['https://app.areal.finance', 'https://panel.areal.finance'];
+
+/**
+ * Dev CORS allow-list — superset of prod so a dev container hitting prod
+ * staging is fine, plus the two Vite dev-server ports.
+ */
+const DEV_ALLOWED_ORIGINS = [
+  ...PROD_ALLOWED_ORIGINS,
   'http://localhost:5173',
   'http://localhost:5174',
 ];
@@ -32,8 +45,9 @@ async function bootstrap() {
   });
 
   app.use(helmet());
+  const isProduction = process.env.NODE_ENV === 'production';
   app.enableCors({
-    origin: ALLOWED_ORIGINS,
+    origin: isProduction ? PROD_ALLOWED_ORIGINS : DEV_ALLOWED_ORIGINS,
     credentials: true,
   });
 
