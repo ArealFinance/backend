@@ -249,6 +249,27 @@ groups:
           description: "Throttle is failing open. Anti-DoS gate effectively disabled."
 ```
 
+## JWT iss + aud rollout (R-12.3.1-7)
+
+The backend now stamps `issuer=areal-backend` + `audience=areal-api` into
+every freshly-issued access token, and the verifier (REST `JwtStrategy`
++ `/realtime` handshake) rejects tokens missing or mismatched on either
+claim.
+
+**User-visible impact: every currently-issued access token becomes
+invalid the moment the new build serves traffic.** Frontend / SDK
+consumers will see `401 Unauthorized` on the next REST call after
+deploy; the standard refresh flow will fail (the refresh-token rows are
+unchanged in the DB but the access-token verifier rejects the legacy
+shape). End users must **re-authenticate** by signing the wallet
+challenge again — the existing `WalletConnect` flow handles this with
+no UI change.
+
+For the hackathon-stage product this is acceptable; document the
+expected support volume around the deploy window. There is no rollback
+plan that preserves legacy tokens — once the new verifier is live, the
+rename is the new contract.
+
 ## Operational checklist
 
 Post-deploy (10 gates — all must be GREEN before traffic ramp):
