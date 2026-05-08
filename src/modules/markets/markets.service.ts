@@ -109,7 +109,7 @@ export class MarketsService {
       txCount24h: row.txCount24h,
       activeWallets24h: row.activeWallets24h,
       poolCount: row.poolCount,
-      distributorCount: row.distributorCount,
+      cumulativeDistributorCount: row.cumulativeDistributorCount,
       blockTime: Number(row.blockTime),
       updatedAt: row.updatedAt.toISOString(),
     };

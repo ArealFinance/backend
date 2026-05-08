@@ -149,7 +149,7 @@ UPDATE commits.
   "txCount24h": 1532,
   "activeWallets24h": 287,
   "poolCount": 12,
-  "distributorCount": 8,
+  "cumulativeDistributorCount": 8,
   "blockTime": 1714780800
 }
 ```

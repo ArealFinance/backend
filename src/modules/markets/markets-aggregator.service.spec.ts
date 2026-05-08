@@ -542,11 +542,12 @@ describe('MarketsAggregatorService', () => {
     it('emits protocol_summary_tick after the singleton UPDATE', async () => {
       const manager = makeFakeManager({
         lockResult: true,
-        // 3 raw queries between lock + UPDATE: tvl, pool_count, distributor_count
+        // 3 raw queries between lock + UPDATE: tvl, pool_count,
+        // cumulative_distributor_count
         queryResults: [
           [{ total_tvl_usd: '1234.5' }],
           [{ pool_count: '7' }],
-          [{ distributor_count: '3' }],
+          [{ cumulative_distributor_count: '3' }],
           [], // UPDATE returns []
         ],
         rawOne: { volume_usd: '99.9', tx_count: '10', wallets: '4' },
@@ -563,7 +564,7 @@ describe('MarketsAggregatorService', () => {
         txCount24h: 10,
         activeWallets24h: 4,
         poolCount: 7,
-        distributorCount: 3,
+        cumulativeDistributorCount: 3,
       });
     });
 

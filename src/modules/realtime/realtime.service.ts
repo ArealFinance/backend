@@ -34,7 +34,11 @@ export interface ProtocolSummaryTickEmit {
   txCount24h: number;
   activeWallets24h: number;
   poolCount: number;
-  distributorCount: number;
+  /**
+   * Distinct `primary_actor` over the full event history of
+   * `RevenueDistributed` — cumulative-since-deploy, not current-state.
+   */
+  cumulativeDistributorCount: number;
   blockTime: number;
 }
 

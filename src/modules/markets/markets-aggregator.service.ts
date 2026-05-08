@@ -398,21 +398,23 @@ export class MarketsAggregatorService {
           .where('t.block_time >= :since', { since })
           .getRawOne()) ?? { volume_usd: '0', tx_count: '0', wallets: '0' };
 
-        // pool_count + distributor_count = current chain state. Source of
-        // truth differs from the 24h window — these are "how many exist now",
-        // not "how many had activity". We approximate via the snapshots table
-        // (DISTINCT pool) until a dedicated chain reader lands.
+        // pool_count = current chain state, cumulative_distributor_count =
+        // cumulative-since-deploy (DISTINCT primary_actor over the full event
+        // history). Source of truth differs from the 24h window — these are
+        // "how many exist now / have ever existed", not "how many had
+        // activity in the last 24h". We approximate pool_count via the
+        // snapshots table (DISTINCT pool) until a dedicated chain reader lands.
         const poolCountRow: { pool_count: string } = (
           await manager.query(
             `SELECT COUNT(DISTINCT "pool")::text AS pool_count FROM "areal"."pool_snapshots"`,
           )
         )[0] ?? { pool_count: '0' };
-        const distributorCountRow: { distributor_count: string } = (
+        const cumulativeDistributorCountRow: { cumulative_distributor_count: string } = (
           await manager.query(
-            `SELECT COUNT(DISTINCT "primary_actor")::text AS distributor_count
+            `SELECT COUNT(DISTINCT "primary_actor")::text AS cumulative_distributor_count
              FROM "areal"."events" WHERE "event_name" = 'RevenueDistributed'`,
           )
-        )[0] ?? { distributor_count: '0' };
+        )[0] ?? { cumulative_distributor_count: '0' };
 
         const nowSec = Math.floor(Date.now() / 1000);
         await manager.query(
@@ -422,7 +424,7 @@ export class MarketsAggregatorService {
             "tx_count_24h" = $3,
             "active_wallets_24h" = $4,
             "pool_count" = $5,
-            "distributor_count" = $6,
+            "cumulative_distributor_count" = $6,
             "block_time" = $7,
             "updated_at" = now()
           WHERE "id" = 'singleton'`,
@@ -432,7 +434,7 @@ export class MarketsAggregatorService {
             parseInt(txRow.tx_count ?? '0', 10),
             parseInt(txRow.wallets ?? '0', 10),
             parseInt(poolCountRow.pool_count, 10),
-            parseInt(distributorCountRow.distributor_count, 10),
+            parseInt(cumulativeDistributorCountRow.cumulative_distributor_count, 10),
             nowSec,
           ],
         );
@@ -443,7 +445,10 @@ export class MarketsAggregatorService {
           txCount24h: parseInt(txRow.tx_count ?? '0', 10),
           activeWallets24h: parseInt(txRow.wallets ?? '0', 10),
           poolCount: parseInt(poolCountRow.pool_count, 10),
-          distributorCount: parseInt(distributorCountRow.distributor_count, 10),
+          cumulativeDistributorCount: parseInt(
+            cumulativeDistributorCountRow.cumulative_distributor_count,
+            10,
+          ),
           blockTime: nowSec,
         });
       });

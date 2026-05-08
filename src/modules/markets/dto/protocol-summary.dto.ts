@@ -11,7 +11,11 @@ export class ProtocolSummaryDto {
   @ApiProperty() txCount24h!: number;
   @ApiProperty() activeWallets24h!: number;
   @ApiProperty() poolCount!: number;
-  @ApiProperty() distributorCount!: number;
+  @ApiProperty({
+    description:
+      'Distinct primary_actor over the full event history of RevenueDistributed — cumulative-since-deploy, not current-state.',
+  })
+  cumulativeDistributorCount!: number;
   @ApiProperty({ description: 'Unix seconds at last refresh' }) blockTime!: number;
   @ApiProperty({ description: 'ISO 8601 timestamp' }) updatedAt!: string;
 }

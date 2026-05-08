@@ -36,8 +36,14 @@ export class ProtocolSummary {
   @Column({ type: 'integer', name: 'pool_count', default: 0 })
   poolCount!: number;
 
-  @Column({ type: 'integer', name: 'distributor_count', default: 0 })
-  distributorCount!: number;
+  /**
+   * Distinct `primary_actor` over the FULL event history of
+   * `RevenueDistributed` — cumulative since deploy, NOT a current-state
+   * count. The 30s `writeProtocolSummary30s` job re-runs the
+   * `COUNT(DISTINCT primary_actor)` query on every tick.
+   */
+  @Column({ type: 'integer', name: 'cumulative_distributor_count', default: 0 })
+  cumulativeDistributorCount!: number;
 
   @Column({ type: 'bigint', name: 'block_time', default: 0 })
   blockTime!: string;

@@ -17,9 +17,9 @@ Markets aggregates + Socket.IO realtime substrate.
   - `GET /markets/summary`
 - **Socket.IO gateway** on `/realtime` namespace with Redis adapter.
 
-## Migrations 0005 + 0006
+## Migrations 0005 + 0006 + 0007
 
-Run AFTER deploy, BEFORE traffic ramp. Both apply in sequence:
+Run AFTER deploy, BEFORE traffic ramp. All three apply in sequence:
 
 ```bash
 npm run migration:run
@@ -34,6 +34,16 @@ npm run migration:run
 decimals / apy until the next snapshot cycle replaces them — this is
 expected and harmless** (the rollup leaves `apy_24h` NULL for any pool
 where the inputs aren't all present).
+
+`0007-rename-distributor-count` (R-12.3.1-2) renames
+`areal.protocol_summary.distributor_count` →
+`cumulative_distributor_count` to surface the metric's true semantics
+(`COUNT(DISTINCT primary_actor) FROM events WHERE
+event_name='RevenueDistributed'` — cumulative-since-deploy, not
+current-state). The wire format on `protocol_summary_tick` and
+`GET /markets/summary` changes accordingly: clients reading
+`distributorCount` must switch to `cumulativeDistributorCount`. The
+rename is reversible via `migration:revert`.
 
 Verifies (post-migration):
 - `areal.pool_snapshots`, `areal.daily_pool_aggregates`,
@@ -58,7 +68,7 @@ Verifies (post-migration):
 
 Rollback (if needed):
 ```bash
-npm run migration:revert  # reverts 0006 only — re-run for 0005
+npm run migration:revert  # reverts 0007 only — re-run for 0006 / 0005
 ```
 
 ## Bull repeatable verification
