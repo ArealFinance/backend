@@ -109,7 +109,10 @@ async function main(): Promise<void> {
           `[backfill] batch failed at sig ${batch[0]?.signature}#${batch[0]?.logIndex}:`,
           err instanceof Error ? err.message : String(err),
         );
-        throw err;
+        // Break (don't throw) so the summary log below still fires with the
+        // correct `errors` count. Ops can grep the summary for "batches
+        // failed" to decide whether to re-run.
+        break;
       }
 
       processed += batch.length;

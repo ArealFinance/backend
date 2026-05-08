@@ -19,12 +19,14 @@ import type { DecodedEvent } from './decoder.service.js';
  * projections read FROM `events`.
  *
  * Field-extraction notes:
- *   The IDL field names are snake_case (Anchor convention). To keep the
+ *   The IDL field names are snake_case (Anchor convention) but the SDK
+ *   decoder (`@areal/sdk/events`) remaps them to camelCase before we see
+ *   them — see `sdk/src/events/registry.ts::remapPayload`. To keep the
  *   denormalised lookup columns (`primary_actor`, `pool`, `ot_mint`)
  *   correct across all 60 event types, we look for a small canonical set
- *   of likely keys per concept and pick the first one present. Adding new
- *   events doesn't require touching this file unless they introduce a brand
- *   new actor concept.
+ *   of likely camelCase keys per concept and pick the first one present.
+ *   Adding new events doesn't require touching this file unless they
+ *   introduce a brand new actor concept.
  */
 export interface PersistMeta {
   signature: string;
@@ -102,8 +104,9 @@ export class PersisterService {
    *   - Buffer / Uint8Array → base58 string IF length 32 (PublicKey-shaped),
    *     else hex string.
    *   - PublicKey-like objects (anything with `.toBase58()`) → base58 string.
-   * Other primitives pass through. We keep snake_case field names to stay
-   * faithful to the IDL — projection code maps to camelCase later.
+   * Other primitives pass through. Field names are camelCase as supplied by
+   * the SDK decoder (`@areal/sdk/events`) — projection / extract helpers and
+   * downstream readers all key on camelCase.
    */
   private normaliseForJson(input: unknown): Record<string, unknown> {
     return this.normaliseValue(input) as Record<string, unknown>;
@@ -136,7 +139,8 @@ export class PersisterService {
 /**
  * Try a series of plausible field names for the "primary actor" — the user
  * pubkey responsible for the event (depositor, swapper, claimant, etc).
- * Returns null if no match — events like `DexInitialized` have no actor.
+ * Keys are camelCase to match the SDK decoder output. Returns null if no
+ * match — events like `DexInitialized` have no actor.
  */
 export function extractPrimaryActor(data: Record<string, unknown>): string | null {
   const keys = ['user', 'depositor', 'swapper', 'claimant', 'recipient', 'authority', 'funder'];
@@ -144,14 +148,16 @@ export function extractPrimaryActor(data: Record<string, unknown>): string | nul
 }
 
 export function extractPool(data: Record<string, unknown>): string | null {
-  // Pool concept across native-dex (`pool`), nexus (`nexus_pool`), futarchy
-  // (`market`/`proposal`), distributors (`distributor`).
-  const keys = ['pool', 'nexus_pool', 'distributor', 'market'];
+  // Pool concept across native-dex (`pool`), nexus (`nexusPool`,
+  // `lpPosition`), futarchy (`market`), distributors (`distributor`).
+  // Keys are camelCase to match the SDK decoder output.
+  const keys = ['pool', 'nexusPool', 'lpPosition', 'distributor', 'market'];
   return pickFirstString(data, keys);
 }
 
 export function extractOtMint(data: Record<string, unknown>): string | null {
-  const keys = ['ot_mint', 'mint', 'rwt_mint'];
+  // camelCase to match the SDK decoder output.
+  const keys = ['otMint', 'mint', 'rwtMint'];
   return pickFirstString(data, keys);
 }
 

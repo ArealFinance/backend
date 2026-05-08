@@ -22,7 +22,13 @@ describe('cursor', () => {
   });
 
   it('round-trips boundary values (0 blockTimeMs, large logIndex)', () => {
-    const c: DecodedCursor = { blockTimeMs: 0, signature: 'abc', logIndex: 2147483647 };
+    const c: DecodedCursor = {
+      blockTimeMs: 0,
+      // Real-shaped signature so the post-decode SIGNATURE_RE check passes.
+      signature:
+        '4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM6asCMcsj7yyKjj9Lvgrb6h5GwzKy2nW2g5fKVpXkY8WRR',
+      logIndex: 2147483647,
+    };
     expect(decodeCursor(encodeCursor(c))).toEqual(c);
   });
 
@@ -76,5 +82,25 @@ describe('cursor', () => {
     const c: DecodedCursor = { ...sample, blockTimeMs: 1234.99 };
     const enc = encodeCursor(c);
     expect(decodeCursor(enc).blockTimeMs).toBe(1234);
+  });
+
+  it('rejects cursors whose signature segment fails the base58 alphabet', () => {
+    // `0` and `O` are NOT in the base58 alphabet — typo-shaped probes that
+    // should never decode as a valid signature.
+    const broken = Buffer.from(`1234|${'0'.repeat(80)}|0`, 'utf8').toString('base64url');
+    expect(() => decodeCursor(broken)).toThrow(/signature/);
+  });
+
+  it('rejects oversized input before any decode work', () => {
+    // 257 base64url chars — one over the cap.
+    const oversized = 'A'.repeat(257);
+    expect(() => decodeCursor(oversized)).toThrow(/oversized/);
+  });
+
+  it('rejects input with non-base64url characters (`+`, `/`, `=`)', () => {
+    expect(() => decodeCursor('abc+def')).toThrow(/base64url/);
+    expect(() => decodeCursor('abc/def')).toThrow(/base64url/);
+    expect(() => decodeCursor('abc=def')).toThrow(/base64url/);
+    expect(() => decodeCursor('abc.def')).toThrow(/base64url/);
   });
 });

@@ -28,6 +28,23 @@ export interface DecodedCursor {
 
 const SEP = '|';
 
+/**
+ * Hard cap on raw cursor input length. A well-formed cursor encodes ~95
+ * bytes (13-digit ms + `|` + ~88-char base58 sig + `|` + small int) → ~128
+ * chars after base64url. 256 leaves comfortable headroom while rejecting
+ * obvious DoS / probe payloads before we allocate a Buffer.
+ */
+const MAX_INPUT_LEN = 256;
+
+/** Base64url alphabet — digits, letters, `-`, `_`. */
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Solana base58 signature: 64 bytes → 87-88 chars typical. We allow 64-90
+ * to absorb edge encodings without opening the gate to arbitrary input.
+ */
+const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
+
 export function encodeCursor(c: DecodedCursor): string {
   if (!Number.isFinite(c.blockTimeMs) || c.blockTimeMs < 0) {
     throw new Error('encodeCursor: blockTimeMs must be a non-negative finite number');
@@ -54,12 +71,16 @@ export function decodeCursor(s: string): DecodedCursor {
   if (typeof s !== 'string' || s.length === 0) {
     throw new Error('decodeCursor: empty cursor');
   }
-  let raw: string;
-  try {
-    raw = Buffer.from(s, 'base64url').toString('utf8');
-  } catch {
-    throw new Error('decodeCursor: not valid base64url');
+  if (s.length > MAX_INPUT_LEN) {
+    throw new Error('decodeCursor: oversized input');
   }
+  if (!BASE64URL_RE.test(s)) {
+    throw new Error('decodeCursor: not base64url');
+  }
+  // `Buffer.from(_, 'base64url')` is total in Node — it silently drops bad
+  // chars rather than throwing. The regex above is the real guard, so the
+  // decode itself is unconditional.
+  const raw = Buffer.from(s, 'base64url').toString('utf8');
   const parts = raw.split(SEP);
   if (parts.length !== 3) {
     throw new Error('decodeCursor: malformed cursor');
@@ -75,6 +96,9 @@ export function decodeCursor(s: string): DecodedCursor {
   }
   if (!signature || signature.length === 0) {
     throw new Error('decodeCursor: empty signature');
+  }
+  if (!SIGNATURE_RE.test(signature)) {
+    throw new Error('decodeCursor: malformed signature');
   }
   return { blockTimeMs: Math.trunc(blockTimeMs), signature, logIndex };
 }

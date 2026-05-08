@@ -34,18 +34,28 @@ describe('persister field extraction', () => {
     expect(extractPrimaryActor({ user: null })).toBeNull();
   });
 
-  it('extracts pool from canonical field names', () => {
+  it('extracts pool from canonical field names (camelCase per SDK decoder)', () => {
     expect(extractPool({ pool: 'P1' })).toBe('P1');
-    expect(extractPool({ nexus_pool: 'P2' })).toBe('P2');
+    expect(extractPool({ nexusPool: 'P2' })).toBe('P2');
+    expect(extractPool({ lpPosition: 'L1' })).toBe('L1');
     expect(extractPool({ distributor: 'D1' })).toBe('D1');
     expect(extractPool({ market: 'M1' })).toBe('M1');
     expect(extractPool({})).toBeNull();
   });
 
-  it('extracts ot_mint from canonical field names', () => {
-    expect(extractOtMint({ ot_mint: 'OT1' })).toBe('OT1');
+  it('extracts otMint from canonical field names (camelCase per SDK decoder)', () => {
+    expect(extractOtMint({ otMint: 'OT1' })).toBe('OT1');
     expect(extractOtMint({ mint: 'M1' })).toBe('M1');
-    expect(extractOtMint({ rwt_mint: 'R1' })).toBe('R1');
+    expect(extractOtMint({ rwtMint: 'R1' })).toBe('R1');
     expect(extractOtMint({})).toBeNull();
+  });
+
+  it('does NOT match snake_case keys (regression for Phase 12.1 latent bug)', () => {
+    // SDK decoder remaps snake_case → camelCase in `remapPayload`; if a
+    // future refactor reintroduces snake_case lookup, every event would
+    // land with NULL denormalised columns.
+    expect(extractPool({ nexus_pool: 'P2' })).toBeNull();
+    expect(extractOtMint({ ot_mint: 'OT1' })).toBeNull();
+    expect(extractOtMint({ rwt_mint: 'R1' })).toBeNull();
   });
 });

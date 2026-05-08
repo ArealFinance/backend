@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 
 import { ClaimHistory } from '../../entities/claim-history.entity.js';
 import { LpPositionHistory } from '../../entities/lp-position-history.entity.js';
@@ -108,8 +108,7 @@ function cursorOf(row: { blockTime: Date; signature: string; logIndex: number })
 }
 
 function applyBefore(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  qb: any,
+  qb: SelectQueryBuilder<ObjectLiteral>,
   before: string | undefined,
   alias: string,
 ): void {

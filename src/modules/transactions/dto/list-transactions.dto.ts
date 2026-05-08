@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
@@ -21,7 +21,7 @@ export const TRANSACTION_KINDS = [
 export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 
 export class ListTransactionsDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'Wallet to filter transactions for (base58)',
     example: 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK',
   })
