@@ -260,7 +260,11 @@ export class AuthService {
     const payload: JwtPayload = { sub: wallet };
     const accessToken = this.jwt.sign(payload, {
       secret: this.config.get<string>('jwt.secret'),
-      expiresIn: this.config.get<string>('jwt.expiresIn'),
+      // `expiresIn` is `number | ms.StringValue` in `@nestjs/jwt` v11. Env-derived
+      // `string` doesn't fit the literal-string union; we cast at the boundary
+      // and rely on `parseTtlSeconds`'s grammar check elsewhere to surface bad
+      // values during local dev.
+      expiresIn: (this.config.get<string>('jwt.expiresIn') ?? '7d') as `${number}d`,
     });
 
     const refreshTtlSecs = this.parseTtlSeconds(
