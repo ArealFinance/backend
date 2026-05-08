@@ -49,8 +49,13 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Build context is the meta-repo root so the Dockerfile can `COPY sdk`
+      # and `COPY vendor` (siblings of `backend/`). The compose file lives
+      # inside backend/, so `..` resolves to areal-meta/. Before deploying,
+      # the operator must clone the meta-repo with --recurse-submodules so
+      # that sdk + vendor are populated alongside backend (see runbook).
+      context: ..
+      dockerfile: backend/Dockerfile
     container_name: areal-backend
     restart: unless-stopped
     depends_on:
