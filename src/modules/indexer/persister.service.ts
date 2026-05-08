@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 
 import { Event } from '../../entities/event.entity.js';
 import type { DecodedEvent } from './decoder.service.js';
@@ -39,29 +39,18 @@ export class PersisterService {
 
   constructor(@InjectRepository(Event) private readonly events: Repository<Event>) {}
 
+  /**
+   * Public single-event persist (no TX wrapper).
+   *
+   * Kept as the original entry-point for code paths that don't need to
+   * project (reconcile sweep, future direct-ingest tooling). When a caller
+   * needs the persist + projection bundled into one Postgres transaction
+   * (the indexer consumer does), use `persistInTx()` against the manager
+   * supplied by `dataSource.transaction()`.
+   */
   async persist(decoded: DecodedEvent, meta: PersistMeta): Promise<void> {
     try {
-      // Build the entity literal then cast to Partial<Event> — TypeORM's
-      // generated `_QueryDeepPartialEntity` treats `jsonb` columns as a deep
-      // partial (recursing into `Record<string, unknown>`), which doesn't
-      // round-trip through TS inference. The runtime contract is identical.
-      const row: Partial<Event> = {
-        programId: decoded.programId.toBase58(),
-        eventName: decoded.eventName,
-        signature: meta.signature,
-        logIndex: meta.logIndex,
-        slot: String(meta.slot),
-        blockTime: meta.blockTime,
-        body: this.normaliseForJson(decoded.data),
-        primaryActor: extractPrimaryActor(decoded.data),
-        pool: extractPool(decoded.data),
-        otMint: extractOtMint(decoded.data),
-      };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await this.events.upsert(row as any, {
-        conflictPaths: ['signature', 'programId', 'logIndex'],
-        skipUpdateIfNoValuesChanged: true,
-      });
+      await this.persistInTx(this.events.manager, decoded, meta);
     } catch (err) {
       this.logger.error(
         `persist failed for ${decoded.eventName} ${meta.signature}#${meta.logIndex}`,
@@ -69,6 +58,42 @@ export class PersisterService {
       );
       throw err;
     }
+  }
+
+  /**
+   * Persist within an external EntityManager — used by the indexer consumer
+   * to bundle persist + projection into one TX so neither lands without the
+   * other (no half-projected events).
+   *
+   * Errors propagate to the caller; the wrapping `dataSource.transaction()`
+   * rolls back on throw.
+   */
+  async persistInTx(
+    manager: EntityManager,
+    decoded: DecodedEvent,
+    meta: PersistMeta,
+  ): Promise<void> {
+    // Build the entity literal then cast to Partial<Event> — TypeORM's
+    // generated `_QueryDeepPartialEntity` treats `jsonb` columns as a deep
+    // partial (recursing into `Record<string, unknown>`), which doesn't
+    // round-trip through TS inference. The runtime contract is identical.
+    const row: Partial<Event> = {
+      programId: decoded.programId.toBase58(),
+      eventName: decoded.eventName,
+      signature: meta.signature,
+      logIndex: meta.logIndex,
+      slot: String(meta.slot),
+      blockTime: meta.blockTime,
+      body: this.normaliseForJson(decoded.data),
+      primaryActor: extractPrimaryActor(decoded.data),
+      pool: extractPool(decoded.data),
+      otMint: extractOtMint(decoded.data),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await manager.getRepository(Event).upsert(row as any, {
+      conflictPaths: ['signature', 'programId', 'logIndex'],
+      skipUpdateIfNoValuesChanged: true,
+    });
   }
 
   /**
