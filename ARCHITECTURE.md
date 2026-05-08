@@ -114,6 +114,28 @@
 - **Production:** `docker-compose.prod.template.yml` materialises the full stack (Postgres + Redis + backend container). All ports bind to `127.0.0.1` — internet exposure is via a reverse proxy (Cloudflared / nginx) that owns TLS termination and ACLs.
 - The Dockerfile produces a slim runtime image (multi-stage, production deps only, non-root user).
 
+### Operator runbook — `/metrics` exposure
+
+`/metrics` is mounted on the same Nest listener as the public REST surface (port 3010). For Phase 12.1 we did NOT split it onto a dedicated localhost-only port — the operator-side ACL is simpler and covers the same ground.
+
+The Cloudflared (or nginx) config at `api.areal.finance` MUST drop external requests to `/metrics`:
+
+```yaml
+# cloudflared ingress (.cloudflared/config.yml)
+ingress:
+  - hostname: api.areal.finance
+    path: /metrics(/.*)?
+    service: http_status:404
+  - hostname: api.areal.finance
+    service: http://127.0.0.1:3010
+```
+
+Prometheus scrapes from inside the same host (over the docker bridge) directly to `http://127.0.0.1:3010/metrics`, bypassing Cloudflared. If we ever co-locate Prometheus on a different host, split `/metrics` onto a dedicated `127.0.0.1:9201` listener (a 10-line Nest standalone-app bootstrap inside `main.ts`) — a TODO in the Phase 12.2 hardening tail.
+
+### Operator runbook — Postgres TLS
+
+`docker-compose.prod.template.yml` ships `?sslmode=disable` because the backend and postgres containers share the compose bridge network — that bridge never crosses the host boundary and adding TLS on it just complicates cert rotation. AppModule's `TypeOrmModule.forRootAsync` opts the node-postgres driver into TLS ONLY when the connection URL contains `sslmode=require`, so changing the URL is the entire upgrade procedure for managed-Postgres / multi-host topologies.
+
 ## Decisions worth flagging
 
 - **ESM, not CommonJS.** `package.json` declares `"type": "module"` and every internal import carries an explicit `.js` extension. Two transitive deps forced our hand: `bs58@6` (ESM-only since v6) and `@areal/sdk` (`"type": "module"` end-to-end). Going CommonJS would have meant pinning both back, which is a non-starter given the SDK is the source of truth for IDLs and program IDs. The TypeORM CLI is invoked via `node --loader ts-node/esm` (see the `migration:*` scripts in `package.json`); decorators work fine under ESM provided `reflect-metadata` is imported once at `main.ts` and `data-source.ts`.

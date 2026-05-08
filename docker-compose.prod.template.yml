@@ -63,6 +63,17 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3010
+      # `sslmode=disable` is INTENTIONAL for single-host docker-compose:
+      # postgres + backend share the bridge network created by compose, the
+      # bridge never crosses the host boundary, and adding TLS inside the
+      # bridge buys nothing while complicating cert rotation. AppModule
+      # (src/app.module.ts) opts the node-postgres driver into TLS only when
+      # the URL explicitly contains `sslmode=require`.
+      #
+      # Upgrade path (multi-host or managed Postgres):
+      #   - change to `?sslmode=require` (driver verifies via the system CA),
+      #   - or add `?sslmode=verify-full` + the CA bundle on the backend
+      #     container (see `pg`'s `ssl: { ca: fs.readFileSync(...) }`).
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
