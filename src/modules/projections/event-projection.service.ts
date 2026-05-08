@@ -11,6 +11,24 @@ import { SwapProjector } from './projectors/swap.projector.js';
 import type { ProjectInput } from './projectors/types.js';
 
 /**
+ * Emit payload returned from `projectInTx` for the six wallet-keyed event
+ * kinds. The indexer consumer collects these and fans them out to the
+ * realtime gateway AFTER the wrapping TX commits — never inside, so a
+ * rollback can't leak a transient emit to subscribers.
+ *
+ * `RevenueDistributed` is wallet-less (fans out across N OT-holders inside
+ * one instruction) so it returns null. Unknown / unprojected events also
+ * return null.
+ */
+export interface ProjectionEmitPayload {
+  wallet: string;
+  kind: 'claim' | 'swap' | 'add_lp' | 'remove_lp' | 'zap_lp' | 'mint_rwt';
+  signature: string;
+  /** Unix seconds; 0 if RPC withheld block_time and we fell back to wall clock. */
+  blockTime: number;
+}
+
+/**
  * Stream-projection dispatcher.
  *
  * Called once per decoded event from the indexer consumer, inside the SAME
@@ -43,7 +61,7 @@ export class EventProjectionService {
     manager: EntityManager,
     decoded: DecodedEvent,
     meta: PersistMeta,
-  ): Promise<void> {
+  ): Promise<ProjectionEmitPayload | null> {
     const eventName = decoded.eventName;
     const input: ProjectInput = {
       data: decoded.data as Record<string, unknown>,
@@ -56,22 +74,30 @@ export class EventProjectionService {
       switch (eventName) {
         case 'RewardsClaimed':
           await this.claim.project(manager, input);
-          break;
+          return buildEmit('claim', input);
         case 'SwapExecuted':
           await this.swap.project(manager, input);
-          break;
+          return buildEmit('swap', input);
         case 'LiquidityAdded':
+          await this.liquidity.project(manager, input);
+          return buildEmit('add_lp', input);
         case 'LiquidityRemoved':
+          await this.liquidity.project(manager, input);
+          return buildEmit('remove_lp', input);
         case 'ZapLiquidityExecuted':
+          await this.liquidity.project(manager, input);
+          return buildEmit('zap_lp', input);
         case 'RwtMinted':
           await this.liquidity.project(manager, input);
-          break;
+          return buildEmit('mint_rwt', input);
         case 'RevenueDistributed':
           await this.revenue.project(manager, input);
-          break;
+          // Wallet-less event — no emit (fanout is per-OT-holder, surfaces
+          // via per-wallet RewardsClaimed events on subsequent claims).
+          return null;
         default:
           // Silent skip — not every persisted event is projected.
-          return;
+          return null;
       }
     } catch (err) {
       this.metrics.projectionErrors.inc({ event_name: eventName });
@@ -84,4 +110,41 @@ export class EventProjectionService {
       stop();
     }
   }
+}
+
+/**
+ * Read the wallet from the projector input and build the emit payload.
+ *
+ * Different event shapes use different wallet field names (`provider`,
+ * `user`, `claimant`, `swapper`) — the persister normalises these into
+ * `data` but the field name still varies by event. We try each in
+ * order and fall back to `null` if the event has no wallet (which would
+ * mean the projection layer let an unprojectable event through — the
+ * caller treats this as "no emit" so we don't leak a transaction-indexed
+ * notification with a malformed wallet).
+ */
+function buildEmit(
+  kind: ProjectionEmitPayload['kind'],
+  input: ProjectInput,
+): ProjectionEmitPayload | null {
+  const candidates = ['provider', 'user', 'claimant', 'swapper', 'wallet'];
+  let wallet: string | null = null;
+  for (const k of candidates) {
+    const v = input.data[k];
+    if (typeof v === 'string' && v.length > 0) {
+      wallet = v;
+      break;
+    }
+  }
+  if (!wallet) return null;
+
+  // block_time is a Date in PersistMeta; the realtime payload surfaces it
+  // as unix seconds (parallel to the SDK's portfolio-snapshot convention).
+  const blockTime = Math.floor(input.meta.blockTime.getTime() / 1000);
+  return {
+    wallet,
+    kind,
+    signature: input.meta.signature,
+    blockTime,
+  };
 }

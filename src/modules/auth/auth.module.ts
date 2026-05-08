@@ -33,6 +33,9 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, authRedisProvider],
-  exports: [AuthService, JwtStrategy, PassportModule],
+  // JwtModule is re-exported so consumers (e.g. RealtimeModule's WS
+  // handshake gate in Phase 12.3.1) can `JwtService.verifyAsync` against
+  // the same secret/options as the REST auth flow.
+  exports: [AuthService, JwtStrategy, JwtModule, PassportModule],
 })
 export class AuthModule {}

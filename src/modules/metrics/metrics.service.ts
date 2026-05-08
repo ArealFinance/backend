@@ -64,6 +64,75 @@ export class MetricsService implements OnModuleInit {
     labelNames: ['event_name'] as const,
   });
 
+  // ── Phase 12.3.1: markets aggregator + realtime ──────────────────────────
+
+  /**
+   * Aggregator job duration. One label per cron job (`snapshot60s`,
+   * `rollup5m`, `summary30s`). Alert on p95 > 30s for `snapshot60s` —
+   * a slow snapshot starves the next tick and the realtime emit cadence
+   * drifts.
+   */
+  readonly aggregatorLatency = new Histogram({
+    name: 'aggregator_latency_seconds',
+    help: 'Markets aggregator job latency (seconds) by job',
+    labelNames: ['job'] as const,
+    buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120],
+  });
+
+  /**
+   * Aggregator skip counter — incremented when the advisory lock is held
+   * by another worker and we silently no-op. A persistent non-zero rate
+   * usually signals a wedged job (lock acquired and never released).
+   */
+  readonly aggregatorSkipTotal = new Counter({
+    name: 'aggregator_skip_total',
+    help: 'Aggregator job skips (advisory lock contention)',
+    labelNames: ['job'] as const,
+  });
+
+  /**
+   * RPC failure counter for the markets reader. Distinct from
+   * `projection_errors` because aggregator failures don't roll back
+   * a chain-event TX — they only delay the next snapshot.
+   */
+  readonly aggregatorRpcFailures = new Counter({
+    name: 'aggregator_rpc_failures_total',
+    help: 'Aggregator RPC failures (markets reader / chain reads)',
+    labelNames: ['job'] as const,
+  });
+
+  /**
+   * Total Socket.IO connections accepted. Includes both authenticated
+   * (with JWT) and anonymous connections — anonymity is allowed for
+   * public rooms (`protocol`, `pool:*`).
+   */
+  readonly realtimeConnections = new Counter({
+    name: 'realtime_connections_total',
+    help: 'Socket.IO connections accepted',
+  });
+
+  /**
+   * Server-emitted realtime messages, labelled by channel. Useful for
+   * detecting silent emit-loop regressions (e.g. a new event that fires
+   * 10x more often than expected).
+   */
+  readonly realtimeEmits = new Counter({
+    name: 'realtime_emits_total',
+    help: 'Server-side realtime emits by channel',
+    labelNames: ['channel'] as const,
+  });
+
+  /**
+   * Subscription requests by room type (`protocol`, `pool`, `wallet`).
+   * Failed subscriptions (auth rejection, malformed room) increment the
+   * `rejected` label so ops can spot client bugs.
+   */
+  readonly realtimeSubscriptions = new Counter({
+    name: 'realtime_subscriptions_total',
+    help: 'Realtime subscribe attempts by room type',
+    labelNames: ['room_type', 'outcome'] as const,
+  });
+
   /**
    * Guards against double-init when the same instance is wired into both the
    * main Nest app and the secondary MetricsAppModule (Phase 12.1 split-listener
@@ -83,5 +152,11 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.authFailures);
     this.registry.registerMetric(this.projectionLatency);
     this.registry.registerMetric(this.projectionErrors);
+    this.registry.registerMetric(this.aggregatorLatency);
+    this.registry.registerMetric(this.aggregatorSkipTotal);
+    this.registry.registerMetric(this.aggregatorRpcFailures);
+    this.registry.registerMetric(this.realtimeConnections);
+    this.registry.registerMetric(this.realtimeEmits);
+    this.registry.registerMetric(this.realtimeSubscriptions);
   }
 }

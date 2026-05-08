@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { Event } from '../../entities/event.entity.js';
 import { ProjectionsModule } from '../projections/projections.module.js';
+import { RealtimeModule } from '../realtime/realtime.module.js';
 import { BackfillService } from './backfill.service.js';
 import { ChainListenerService } from './chain-listener.service.js';
 import { connectionProvider } from './connection.provider.js';
@@ -18,6 +19,7 @@ import { ReconcileService } from './reconcile.service.js';
     TypeOrmModule.forFeature([Event]),
     BullModule.registerQueue({ name: INDEXER_QUEUE_NAME }),
     ProjectionsModule,
+    RealtimeModule,
   ],
   providers: [
     connectionProvider,

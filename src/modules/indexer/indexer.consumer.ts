@@ -5,7 +5,11 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import type { Job } from 'bull';
 import { DataSource } from 'typeorm';
 
-import { EventProjectionService } from '../projections/event-projection.service.js';
+import {
+  EventProjectionService,
+  type ProjectionEmitPayload,
+} from '../projections/event-projection.service.js';
+import { RealtimeService } from '../realtime/realtime.service.js';
 import { SOLANA_CONNECTION } from './connection.provider.js';
 import { DecoderService } from './decoder.service.js';
 import { type IndexerJob, INDEXER_QUEUE_NAME } from './dto/event-job.dto.js';
@@ -22,6 +26,13 @@ import { PersisterService } from './persister.service.js';
  * Failures throw — Bull's exponential backoff (configured at the producer
  * site) retries up to N attempts. After max attempts a job lands in the
  * failed-jobs set for ops to inspect.
+ *
+ * Realtime emit ordering (Phase 12.3.1):
+ *   The projection service returns an emit payload per wallet-keyed event.
+ *   We collect those AFTER `dataSource.transaction()` commits, then fan
+ *   out via `RealtimeService.emitTransactionIndexed`. NEVER emit inside
+ *   the TX callback — a rollback would leak a notification for a row that
+ *   doesn't exist.
  */
 @Processor(INDEXER_QUEUE_NAME)
 export class IndexerConsumer {
@@ -31,6 +42,7 @@ export class IndexerConsumer {
     private readonly decoder: DecoderService,
     private readonly persister: PersisterService,
     private readonly projections: EventProjectionService,
+    private readonly realtime: RealtimeService,
     @InjectDataSource() private readonly dataSource: DataSource,
     @Inject(SOLANA_CONNECTION) private readonly conn: Connection,
   ) {}
@@ -92,6 +104,10 @@ export class IndexerConsumer {
     // both roll back. Phase 12.2.1: this prevents half-projected events
     // (an `events` row with no `transactions` / `claim_history` row) which
     // would otherwise silently corrupt portfolio history.
+    //
+    // Phase 12.3.1: collect the projector's emit payloads INSIDE the TX,
+    // emit AFTER the TX commits. Emitting inside the TX would leak a
+    // transient notification on rollback.
     for (const { event, logIndex } of decoded) {
       const meta = {
         signature: input.signature,
@@ -99,10 +115,17 @@ export class IndexerConsumer {
         slot: input.slot,
         blockTime: blockTimeDate,
       };
+      const emits: ProjectionEmitPayload[] = [];
       await this.dataSource.transaction(async (manager) => {
         await this.persister.persistInTx(manager, event, meta);
-        await this.projections.projectInTx(manager, event, meta);
+        const emit = await this.projections.projectInTx(manager, event, meta);
+        if (emit) emits.push(emit);
       });
+
+      // POST-COMMIT — fan out to subscribed `wallet:*` rooms.
+      for (const p of emits) {
+        this.realtime.emitTransactionIndexed(p);
+      }
     }
   }
 }
