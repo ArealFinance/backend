@@ -1,0 +1,50 @@
+# Cloudflared config snippet for the Areal backend (Phase 12.1).
+#
+# This is a SNIPPET — merge it into the existing Fornex VPS Cloudflared
+# config (typically /etc/cloudflared/config.yml or ~/.cloudflared/config.yml)
+# alongside the Phase 20 entries for panel.areal.finance / status.areal.finance.
+#
+# Insertion rules:
+#   1. The `ingress:` list is ORDER-SENSITIVE. Cloudflared evaluates rules
+#      top-to-bottom and uses the first match. Place the more-specific
+#      `path: /metrics` rule BEFORE the catch-all `api.areal.finance` rule.
+#   2. Keep the existing `- service: http_status:404` (or `- service: hello-world`)
+#      fallback as the LAST entry — never insert these rules below it.
+#   3. After editing the config, validate + reload:
+#        cloudflared tunnel ingress validate
+#        sudo systemctl reload cloudflared
+#
+# DNS prerequisite: a CNAME `api.areal.finance` -> <tunnel-id>.cfargotunnel.com
+# must exist in the Cloudflare zone (managed via `cloudflared tunnel route dns
+# <tunnel-name> api.areal.finance`).
+
+ingress:
+  # ... existing routes (panel.areal.finance, status.areal.finance, ...) above
+
+  # Defense-in-depth: block /metrics from external access. The backend already
+  # binds the metrics listener to 127.0.0.1:9201 inside the container, and the
+  # main API on :3010 has NO /metrics route, so this rule is paranoia — but
+  # Phase 12.1 architect plan §11 mandates it as a tripwire against future
+  # misconfiguration that accidentally exposes /metrics on the public listener.
+  - hostname: api.areal.finance
+    path: /metrics
+    service: http_status:404
+
+  # Public REST + Swagger surface for the Areal backend.
+  # The backend listens on 127.0.0.1:3010 (Nest.js, behind helmet + CORS
+  # allow-list pinned to app.areal.finance + panel.areal.finance — see
+  # backend/src/main.ts).
+  - hostname: api.areal.finance
+    service: http://127.0.0.1:3010
+    originRequest:
+      # Conservative timeouts; backend is internal so localhost-fast.
+      connectTimeout: 10s
+      tlsTimeout: 10s
+      # Disable HTTP/2 origin to avoid Cloudflare's unbounded request queueing
+      # against a single-process Nest app.
+      http2Origin: false
+      # Forward Host so Nest sees the public hostname (relevant for any
+      # @Req() consumers + Swagger absolute URLs).
+      noHappyEyeballs: true
+
+  # ... existing 404 / hello-world fallback below
