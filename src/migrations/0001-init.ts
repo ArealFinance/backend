@@ -14,8 +14,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `synchronize` (in dev) to recreate them on every startup — keep both sides
  * in sync.
  */
-export class InitSchema0001 implements MigrationInterface {
-  name = 'InitSchema0001';
+export class InitSchema1714780800000 implements MigrationInterface {
+  name = 'InitSchema1714780800000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     // uuid_generate_v4() lives in the `uuid-ossp` extension. Postgres 13+

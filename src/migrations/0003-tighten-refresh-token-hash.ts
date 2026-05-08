@@ -23,8 +23,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   The down migration widens back to varchar(128) without truncation —
  *   reversible.
  */
-export class TightenRefreshTokenHash0003 implements MigrationInterface {
-  name = 'TightenRefreshTokenHash0003';
+export class TightenRefreshTokenHash1714953600000 implements MigrationInterface {
+  name = 'TightenRefreshTokenHash1714953600000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
