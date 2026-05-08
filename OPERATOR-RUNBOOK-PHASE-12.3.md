@@ -320,3 +320,16 @@ Rollback:
    ```bash
    redis-cli del bull:markets-aggregator:repeat bull:markets-aggregator:delayed
    ```
+
+## Compatibility notes
+
+- **Nest.js 11** — backend was upgraded `Nest 10 → 11` on branch
+  `chore/phase-12.1-nest-11-upgrade` to close the phase-12.1 `npm audit`
+  MEDIUM finding (transitive lodash / multer / file-type CVEs in Nest 10's
+  dep tree). All `@nestjs/*` packages, `@nestjs/config@^4`,
+  `@nestjs/throttler@^6`, `class-validator@^0.14`, `class-transformer@^0.5`,
+  `rxjs@^7.8`, and `reflect-metadata@^0.2` are aligned. After the bump,
+  `npm audit --omit=dev` reports **0 vulnerabilities**; the 5 remaining
+  moderate findings are dev-only (vitest → vite → esbuild) and tracked
+  separately. No code adjustments were required — Nest 11 startup, all
+  175 unit tests, and the Nest DI smoke boot all pass cleanly.
