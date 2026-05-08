@@ -7,9 +7,10 @@ import { MetricsService } from './metrics.service.js';
  * Prometheus scrape endpoint.
  *
  * Excluded from Swagger because the response is `text/plain; version=0.0.4`
- * (Prometheus exposition format), not JSON. Bound to the same port as the
- * REST API for now — operators can put it behind a separate firewall rule
- * via reverse-proxy ACL when scraping from outside the network.
+ * (Prometheus exposition format), not JSON. Mounted ONLY on the standalone
+ * `MetricsAppModule` Nest app bound to `127.0.0.1:9201` (see `main.ts`) —
+ * never registered on the public REST surface, so the metrics surface can
+ * never reach the public reverse-proxy / Cloudflared tunnel.
  */
 @ApiExcludeController()
 @Controller('metrics')
