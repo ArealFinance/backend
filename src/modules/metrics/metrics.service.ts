@@ -42,7 +42,18 @@ export class MetricsService implements OnModuleInit {
     labelNames: ['reason'] as const,
   });
 
+  /**
+   * Guards against double-init when the same instance is wired into both the
+   * main Nest app and the secondary MetricsAppModule (Phase 12.1 split-listener
+   * pattern). Both DI contexts call `onModuleInit` on the shared instance;
+   * `collectDefaultMetrics` and `registerMetric` would otherwise throw on the
+   * second call ("metric already registered").
+   */
+  private initialised = false;
+
   onModuleInit(): void {
+    if (this.initialised) return;
+    this.initialised = true;
     collectDefaultMetrics({ register: this.registry });
     this.registry.registerMetric(this.eventsPersisted);
     this.registry.registerMetric(this.queueDepth);
