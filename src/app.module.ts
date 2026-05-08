@@ -1,8 +1,9 @@
 import { BullModule } from '@nestjs/bull';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import configuration from './config/configuration.js';
@@ -36,19 +37,25 @@ import { MetricsModule } from './modules/metrics/metrics.module.js';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres' as const,
-        url: config.get<string>('database.url'),
-        schema: config.get<string>('database.schema'),
-        synchronize: config.get<boolean>('database.synchronize'),
-        logging: config.get<boolean>('database.logging'),
-        entities: [Event, User, RefreshToken],
-        migrations: [],
-        ssl:
-          config.get<string>('environment') === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
-      }),
+      useFactory: (config: ConfigService) => {
+        const url = config.get<string>('database.url') ?? '';
+        // Only opt into TLS when the connection string explicitly requests it
+        // via `sslmode=require`. Self-hosted intra-cluster Docker deployments
+        // ride the bridge network plaintext (`sslmode=disable`); managed
+        // Postgres / multi-host setups should set `sslmode=require` and the
+        // node-postgres driver picks up the CA from the system trust store.
+        const wantsSsl = /[?&]sslmode=require\b/.test(url);
+        return {
+          type: 'postgres' as const,
+          url,
+          schema: config.get<string>('database.schema'),
+          synchronize: config.get<boolean>('database.synchronize'),
+          logging: config.get<boolean>('database.logging'),
+          entities: [Event, User, RefreshToken],
+          migrations: [],
+          ssl: wantsSsl ? { rejectUnauthorized: false } : false,
+        };
+      },
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],
@@ -69,6 +76,12 @@ import { MetricsModule } from './modules/metrics/metrics.module.js';
     IndexerModule,
     HealthModule,
     MetricsModule,
+  ],
+  providers: [
+    // Apply ThrottlerGuard globally so every controller route gets rate-limited
+    // by the default policy (60 req/min/IP). Routes that need a tighter or
+    // looser limit override per-handler via `@Throttle({...})` — see auth.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}
