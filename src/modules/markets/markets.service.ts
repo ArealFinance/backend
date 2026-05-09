@@ -81,6 +81,15 @@ export class MarketsService {
    * Per-pool daily aggregate window. Most-recent N days, descending.
    * Clamps `days` to [1, 90] regardless of DTO validation outcome — the
    * service is the last guard before SQL.
+   *
+   * Phase 12.3.3-I: each aggregate row is enriched with the LATEST
+   * `pool_snapshots` row's per-token USDC prices + on-chain decimals at
+   * or before the aggregate's UTC day-end. Implemented as a 2-step lookup
+   * (base aggregates query, then per-row snapshot lookup) rather than a
+   * single LATERAL JOIN — `days` is clamped to ≤90, so the extra
+   * roundtrips are bounded and the code stays compatible with the
+   * repository-mock test layer. NULL fallthrough when no snapshot exists
+   * before the day boundary (pre-12.3.3.1 rows).
    */
   async listAggregate(pool: string, query: ListAggregateDto): Promise<ListAggregateResponseDto> {
     const days = clamp(query.days ?? DEFAULT_AGGREGATE_DAYS, 1, MAX_AGGREGATE_DAYS);
@@ -90,7 +99,22 @@ export class MarketsService {
       order: { day: 'DESC' },
       take: days,
     });
-    return { items: rows.map(toAggregateRow) };
+
+    const items = await Promise.all(
+      rows.map(async (row) => {
+        const dayEndUnix = computeDayEndUnix(row.day);
+        const latest = await this.snapshots.findOne({
+          where: {
+            pool,
+            blockTime: LessThanOrEqual(String(dayEndUnix)),
+          },
+          order: { blockTime: 'DESC' },
+        });
+        return toAggregateRow(row, latest ?? null);
+      }),
+    );
+
+    return { items };
   }
 
   /**
@@ -136,7 +160,10 @@ function toSnapshotRow(r: PoolSnapshot): SnapshotRowDto {
   };
 }
 
-function toAggregateRow(r: DailyPoolAggregate): DailyAggregateDto {
+function toAggregateRow(
+  r: DailyPoolAggregate,
+  latestSnapshot: PoolSnapshot | null,
+): DailyAggregateDto {
   return {
     pool: r.pool,
     day: typeof r.day === 'string' ? r.day : new Date(r.day).toISOString().slice(0, 10),
@@ -147,6 +174,34 @@ function toAggregateRow(r: DailyPoolAggregate): DailyAggregateDto {
     txCount24h: r.txCount24h,
     uniqueWallets24h: r.uniqueWallets24h,
     apy24h: r.apy24h === null ? null : Number(r.apy24h),
+    // Phase 12.3.3-I: surface latest-snapshot per-token prices + decimals
+    // at the aggregate's day boundary. NULL when no snapshot exists for
+    // (pool, day) before this date — pre-12.3.3.1 rows or empty pool.
+    priceAUsdc:
+      latestSnapshot?.priceAUsdc === undefined || latestSnapshot?.priceAUsdc === null
+        ? null
+        : Number(latestSnapshot.priceAUsdc),
+    priceBUsdc:
+      latestSnapshot?.priceBUsdc === undefined || latestSnapshot?.priceBUsdc === null
+        ? null
+        : Number(latestSnapshot.priceBUsdc),
+    decimalsA: latestSnapshot?.decimalsA ?? null,
+    decimalsB: latestSnapshot?.decimalsB ?? null,
     updatedAt: r.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Compute the UTC end-of-day unix timestamp (seconds) for a date string
+ * `YYYY-MM-DD` or a `Date`. The aggregate's `day` is the UTC day bucket;
+ * "end-of-day" means the start of the FOLLOWING UTC day, exclusive (so the
+ * latest snapshot at-or-before the boundary surfaces correctly even when
+ * the snapshot lands in the very last second).
+ */
+function computeDayEndUnix(day: string | Date): number {
+  const dayStr = typeof day === 'string' ? day : new Date(day).toISOString().slice(0, 10);
+  // `Date.parse('YYYY-MM-DD')` returns the UTC midnight start of that day.
+  const startMs = Date.parse(`${dayStr}T00:00:00.000Z`);
+  // +1 day in seconds.
+  return Math.floor(startMs / 1000) + 86_400;
 }
