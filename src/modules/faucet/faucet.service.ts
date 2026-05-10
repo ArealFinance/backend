@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   HttpException,
   Inject,
   Injectable,
@@ -88,6 +89,21 @@ export class FaucetService {
 
     const dripAmount = amount ?? DEFAULT_AMOUNT;
 
+    // 0. Reject off-curve recipients up-front (defense against the
+    //    rate-limit-rotation drain: a caller submitting a fresh
+    //    PDA-shape "wallet" each call would otherwise burn SOL +
+    //    test-USDC into an account no one can sign for, and bypass
+    //    the per-wallet 24h cap by varying the pubkey).
+    let ownerPk: PublicKey;
+    try {
+      ownerPk = new PublicKey(wallet);
+    } catch {
+      throw new BadRequestException('invalid base58 pubkey');
+    }
+    if (!PublicKey.isOnCurve(ownerPk.toBytes())) {
+      throw new BadRequestException('wallet must be an on-curve account (no PDAs)');
+    }
+
     // 1. Pre-check claim mark.
     const pttl1 = await this.redis.pttl(this.claimedKey(wallet));
     if (pttl1 > 0) {
@@ -112,7 +128,7 @@ export class FaucetService {
       let signature: string;
       let ata: PublicKey;
       try {
-        ({ signature, ata } = await this.buildAndSubmit(wallet, dripAmount));
+        ({ signature, ata } = await this.buildAndSubmit(ownerPk, dripAmount));
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         const stack = error instanceof Error ? error.stack : undefined;
@@ -145,13 +161,12 @@ export class FaucetService {
    * collapses to a 500 with a clean client-facing message.
    */
   private async buildAndSubmit(
-    wallet: string,
+    ownerPk: PublicKey,
     dripAmount: number,
   ): Promise<{ signature: string; ata: PublicKey }> {
     const authority = this.authority!;
     const funder = this.funder!;
 
-    const ownerPk = new PublicKey(wallet);
     const ata = findAta(ownerPk, this.mintPk);
     const ixs: TransactionInstruction[] = [];
 
