@@ -96,9 +96,16 @@ services:
       RPC_WS_MAINNET: ${RPC_WS_MAINNET}
       RPC_URL_DEVNET: ${RPC_URL_DEVNET}
       RPC_WS_DEVNET: ${RPC_WS_DEVNET}
+      RPC_URL_LOCALNET: ${RPC_URL_LOCALNET}
       SOLANA_CLUSTER: ${SOLANA_CLUSTER:-mainnet}
       BACKFILL_BLOCKS: ${BACKFILL_BLOCKS:-216000}
       RECONCILE_INTERVAL_SECS: ${RECONCILE_INTERVAL_SECS:-300}
+      # Localnet-only faucet. Both vars are unset on dev/mainnet; the
+      # `LocalnetOnlyGuard` 404s the route there, and the keypair
+      # providers return null — so leaving these empty in prod env is
+      # safe. Populate ONLY on the localnet stack.
+      FAUCET_USDC_AUTHORITY_KEYPAIR_B64: ${FAUCET_USDC_AUTHORITY_KEYPAIR_B64}
+      FAUCET_SOL_FUNDER_KEYPAIR_B64: ${FAUCET_SOL_FUNDER_KEYPAIR_B64}
 
 volumes:
   postgres-data:

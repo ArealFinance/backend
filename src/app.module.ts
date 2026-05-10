@@ -19,6 +19,7 @@ import { RevenueDistribution } from './entities/revenue-distribution.entity.js';
 import { Transaction } from './entities/transaction.entity.js';
 import { User } from './entities/user.entity.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { FaucetModule } from './modules/faucet/faucet.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { IndexerModule } from './modules/indexer/indexer.module.js';
 import { MetricsModule } from './modules/metrics/metrics.module.js';
@@ -98,6 +99,7 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
     ]),
     SolanaConnectionModule,
     AuthModule,
+    FaucetModule,
     IndexerModule,
     HealthModule,
     MetricsModule,

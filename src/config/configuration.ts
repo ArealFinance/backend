@@ -109,5 +109,15 @@ export default () => {
     metrics: {
       enabled: asBool(process.env.METRICS_ENABLED, true),
     },
+
+    // Localnet-only test-USDC faucet. The actual constants
+    // (mint pubkey, authority pubkey, decimals, drip caps) live in
+    // `modules/faucet/faucet.constants.ts` so they stay close to the
+    // SPL helpers that consume them — this block only carries the
+    // base64 keypair env passthroughs.
+    faucet: {
+      usdcAuthorityKeypairB64: process.env.FAUCET_USDC_AUTHORITY_KEYPAIR_B64,
+      solFunderKeypairB64: process.env.FAUCET_SOL_FUNDER_KEYPAIR_B64,
+    },
   };
 };
