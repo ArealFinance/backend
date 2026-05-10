@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Keypair } from '@solana/web3.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { loadKeypairFromB64Env } from './keypair-loader.js';
 

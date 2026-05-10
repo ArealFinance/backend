@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { describe, expect, it, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 
 import { LocalnetOnlyGuard } from './faucet.guard.js';
 import type { SolanaCluster } from '../../config/configuration.js';
@@ -92,6 +93,6 @@ describe('LocalnetOnlyGuard', () => {
 
     guard.canActivate(mockContext);
 
-    expect((mockConfigService.get as jest.Mock)).toHaveBeenCalledWith('solana.cluster');
+    expect((mockConfigService.get as unknown as Mock)).toHaveBeenCalledWith('solana.cluster');
   });
 });
