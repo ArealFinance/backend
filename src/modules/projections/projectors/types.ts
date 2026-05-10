@@ -68,12 +68,36 @@ export function requireString(data: Record<string, unknown>, key: string): strin
 }
 
 /**
- * Reads a 32-byte pubkey field. Persister stores these as base58 already,
- * but if a future event introduces a hex-emitted buffer the helper falls
- * back gracefully to hex→base58 conversion.
+ * Reads a 32-byte pubkey field. Three input shapes are accepted, in order
+ * of how they reach the projector today:
+ *
+ *   1. Already a base58 string — Persister normalised it before storing
+ *      to `events.body`. The CLI replay path (`projections-backfill`)
+ *      reads pre-normalised JSONB and lands here directly.
+ *
+ *   2. A live `PublicKey` instance (object with `.toBase58()`) — Stream
+ *      path: the indexer consumer passes the SDK decoder's raw payload
+ *      to `projectInTx` WITHOUT going through the persister's normaliser
+ *      first. The decoder wraps every `[u8;32]` field as `PublicKey`, so
+ *      we see the live object here. Convert via `.toBase58()`.
+ *
+ *   3. A hex string from a future event whose 32-byte buffer didn't get
+ *      pubkey-wrapped — fall through to hex→base58 conversion.
+ *
+ * Throws on a missing or non-string-non-PublicKey value so persister
+ * contract drift surfaces loudly during indexer development.
  */
 export function requirePubkey(data: Record<string, unknown>, key: string): string {
-  const v = requireString(data, key);
+  const v = data[key];
+  // (2) Live PublicKey object from the SDK decoder.
+  if (v && typeof v === 'object') {
+    const obj = v as { toBase58?: () => string };
+    if (typeof obj.toBase58 === 'function') return obj.toBase58();
+  }
+  // (1) + (3): require a string from here on.
+  if (typeof v !== 'string' || v.length === 0) {
+    throw new Error(`projector: missing/non-string field "${key}"`);
+  }
   // Hex encoding is lowercase a–f only; valid base58 uses no `0`/`O`/`I`/`l`
   // and the alphabet does include `a–f` so we can't separate them by character
   // class alone. Rely on length: 32-byte pubkey → 44 base58 chars (43 in rare
@@ -85,13 +109,20 @@ export function requirePubkey(data: Record<string, unknown>, key: string): strin
 }
 
 /**
- * Big-int-shaped fields. The persister always normalises bigint → string,
- * so the value should be a numeric string by the time we read it. Tolerate
- * `number` as a fallback (defensive for events where the IDL types as a
- * smaller integer the persister kept as native).
+ * Big-int-shaped fields. Three shapes accepted, mirroring `requirePubkey`:
+ *
+ *   1. Numeric string — persister-normalised path (CLI replay or tests
+ *      reading pre-stored JSONB).
+ *   2. Native `bigint` — stream path. The SDK decoder emits u64/u128 as
+ *      `bigint` directly; the persister stringifies them before storing
+ *      to `events.body`, but the projector sees the raw decoded payload
+ *      and needs to coerce here.
+ *   3. Native `number` — defensive fallback for events where the IDL
+ *      types a smaller integer (u8/u16/u32) the decoder kept as native.
  */
 export function requireBigStr(data: Record<string, unknown>, key: string): string {
   const v = data[key];
+  if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'string' && /^-?\d+$/.test(v)) return v;
   if (typeof v === 'number' && Number.isInteger(v)) return String(v);
   throw new Error(`projector: missing/non-integer field "${key}"`);
