@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { Connection } from '@solana/web3.js';
 import type { Redis } from 'ioredis';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -154,5 +154,38 @@ describe('HoldersService', () => {
 
     await expect(svc.getHolders(VALID_MINT)).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(set).not.toHaveBeenCalled();
+  });
+
+  it('throws BadRequestException for malformed mint that bypasses regex', async () => {
+    // The controller's regex (Solana base58, 32-44 chars) prevents this in
+    // production, but the service must self-defend. We craft a string that is
+    // base58-shaped but not a valid 32-byte PublicKey: an all-`1` string of
+    // valid length decodes to all-zero bytes of the wrong length, causing
+    // `new PublicKey(...)` to throw. This exercises the defense-in-depth path.
+    const { redis } = makeRedis();
+    const getProgramAccounts = vi.fn();
+    const svc = new HoldersService(makeConn(getProgramAccounts), redis);
+    const malformed = '1'.repeat(33); // base58-valid charset but invalid length when decoded
+
+    await expect(svc.getHolders(malformed)).rejects.toBeInstanceOf(BadRequestException);
+    expect(getProgramAccounts).not.toHaveBeenCalled();
+  });
+
+  it('skips short-buffer accounts and continues counting', async () => {
+    const { redis } = makeRedis();
+    const accounts = makeAccounts(
+      Buffer.alloc(4), // short buffer — must be skipped (would otherwise RangeError)
+      amountBuf(1),
+      amountBuf(0, 7),
+    );
+    const getProgramAccounts = vi.fn().mockResolvedValue(accounts);
+    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const svc = new HoldersService(makeConn(getProgramAccounts), redis);
+
+    const result = await svc.getHolders(VALID_MINT);
+
+    expect(result.count).toBe(2);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('short buffer'));
+    warnSpy.mockRestore();
   });
 });

@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Connection, PublicKey } from '@solana/web3.js';
 import type { Redis } from 'ioredis';
 
@@ -75,15 +81,14 @@ export class HoldersService {
     this.logger.log(`cache miss mint=${mint} — querying RPC`);
     let pk: PublicKey;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       pk = new PublicKey(mint);
-    } catch (e) {
-      // Defense-in-depth — controller's regex guard should prevent this.
-      throw new Error(`invalid mint: ${(e as Error).message}`);
+    } catch {
+      // Invalid input → 400 (not 500). Do not leak web3.js internals into the
+      // response body. Controller's regex guard should prevent this path in
+      // practice — this is defense-in-depth.
+      throw new BadRequestException('invalid mint');
     }
-    // Reference `pk` so its construction validates the input and the var is
-    // not flagged as unused under strict TS settings.
-    void pk;
+    void pk; // defense-in-depth — controller's regex guard prevents this path
 
     let count = 0;
     try {
@@ -96,6 +101,13 @@ export class HoldersService {
       const dt = Date.now() - t0;
       for (const { account } of accounts) {
         const buf = account.data;
+        // RPC contract guarantees `dataSlice.length=8`, but a malformed or
+        // truncated upstream response would otherwise throw RangeError and
+        // abort the whole iteration — losing already-counted holders.
+        if (buf.length < 8) {
+          this.logger.warn(`short buffer mint=${mint} len=${buf.length} — skipping account`);
+          continue;
+        }
         // Avoid BigInt allocation — exclude-zero check via two u32 reads.
         // Little-endian u64 is two consecutive LE u32s; either non-zero
         // means amount > 0.
