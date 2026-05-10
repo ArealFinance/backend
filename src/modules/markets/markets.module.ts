@@ -15,6 +15,8 @@ import {
 import { MarketsAggregatorService } from './markets-aggregator.service.js';
 import { MarketsController } from './markets.controller.js';
 import { MarketsService } from './markets.service.js';
+import { HoldersService } from './holders/holders.service.js';
+import { marketsRedisProvider } from './holders/markets-redis.provider.js';
 
 /**
  * Phase 12.3.1 markets module.
@@ -45,6 +47,8 @@ import { MarketsService } from './markets.service.js';
     MarketsAggregatorService,
     MarketsAggregatorConsumer,
     MarketsAggregatorBootstrap,
+    HoldersService,
+    marketsRedisProvider,
   ],
   exports: [MarketsService],
 })
