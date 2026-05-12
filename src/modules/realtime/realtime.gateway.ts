@@ -35,6 +35,8 @@ const IP_HEADER_TRUSTED = process.env.NODE_ENV === 'production';
  * the underlying Socket.IO server.
  */
 export const REALTIME_ALLOWED_ORIGINS = [
+  'https://areal.finance',
+  'https://www.areal.finance',
   'https://app.areal.finance',
   'https://panel.areal.finance',
   'http://localhost:5173',

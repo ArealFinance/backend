@@ -35,7 +35,17 @@ import { RealtimeRedisIoAdapter } from './modules/realtime/redis-io.adapter.js';
  * is on the same network. Add new prod origins here and redeploy; a missing
  * entry surfaces as a CORS 4xx on the client, not a silent allow.
  */
-const PROD_ALLOWED_ORIGINS = ['https://app.areal.finance', 'https://panel.areal.finance'];
+const PROD_ALLOWED_ORIGINS = [
+  // Public app. `areal.finance` is the canonical apex; `app.areal.finance`
+  // and `www.areal.finance` redirect to it (Cloudflare-side) but the
+  // browser still sends the pre-redirect origin on the initial XHR, so
+  // both stay allow-listed while the migration settles.
+  'https://areal.finance',
+  'https://www.areal.finance',
+  'https://app.areal.finance',
+  // Ops panel.
+  'https://panel.areal.finance',
+];
 
 /**
  * Dev CORS allow-list — superset of prod so a dev container hitting prod
