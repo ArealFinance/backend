@@ -118,6 +118,12 @@ export default () => {
     faucet: {
       usdcAuthorityKeypairB64: process.env.FAUCET_USDC_AUTHORITY_KEYPAIR_B64,
       solFunderKeypairB64: process.env.FAUCET_SOL_FUNDER_KEYPAIR_B64,
+      // Expected mint-authority pubkey — the boot-time safety pin. On a
+      // test-validator reset the deployer (and thus the faucet authority)
+      // rotates; set this to the new deployer pubkey so the boot check
+      // tracks it without a code change. Falls back to
+      // DEFAULT_EXPECTED_AUTHORITY in faucet.constants.ts when unset.
+      usdcAuthorityPubkey: process.env.FAUCET_USDC_AUTHORITY,
     },
   };
 };

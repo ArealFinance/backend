@@ -9,14 +9,7 @@ import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest';
 import type { Redis } from 'ioredis';
 
 import { FaucetService } from './faucet.service.js';
-import {
-  DEFAULT_AMOUNT,
-  LOCK_TTL_SEC,
-  MIN_FUNDING_LAMPORTS,
-  RATE_LIMIT_TTL_SEC,
-  USDC_DECIMALS,
-  USDC_MINT_PUBKEY,
-} from './faucet.constants.js';
+import { LOCK_TTL_SEC } from './faucet.constants.js';
 
 /**
  * Unit tests for FaucetService. Tests cover:
