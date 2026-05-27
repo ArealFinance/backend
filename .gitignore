@@ -10,6 +10,8 @@ build/
 .env
 .env.local
 .env.development
+.env.devnet
+.env.mainnet
 .env.test
 .env.production
 .env.*.local
