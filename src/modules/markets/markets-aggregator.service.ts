@@ -2,12 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { getMarketsSnapshot } from '@areal/sdk/markets';
-import {
-  NATIVE_DEX_PROGRAM_ID,
-  OWNERSHIP_TOKEN_PROGRAM_ID,
-  RWT_ENGINE_PROGRAM_ID,
-  type ClusterName,
-} from '@areal/sdk/network';
+import { getProgramIds, type ClusterName } from '@areal/sdk/network';
 import { Connection } from '@solana/web3.js';
 import { DataSource, Repository } from 'typeorm';
 
@@ -121,10 +116,17 @@ export class MarketsAggregatorService {
       await this.runWithLock('snapshot60s', JOB_LOCK_IDS.snapshot60s, async (manager) => {
         let snapshot;
         try {
-          snapshot = await getMarketsSnapshot(this.conn, this.cluster(), {
-            nativeDexProgramId: NATIVE_DEX_PROGRAM_ID,
-            ownershipTokenProgramId: OWNERSHIP_TOKEN_PROGRAM_ID,
-            rwtEngineProgramId: RWT_ENGINE_PROGRAM_ID,
+          // Resolve program IDs per cluster so devnet reads land on devnet
+          // .so addresses rather than the mainnet shim. Pre-fix this path
+          // imported `NATIVE_DEX_PROGRAM_ID` etc. from the deprecated mainnet
+          // shim — the markets snapshot then probed mainnet pubkeys on a
+          // devnet RPC and returned empty results (M4 fix).
+          const cluster = this.cluster();
+          const programIds = getProgramIds(cluster);
+          snapshot = await getMarketsSnapshot(this.conn, cluster, {
+            nativeDexProgramId: programIds.nativeDex,
+            ownershipTokenProgramId: programIds.ownershipToken,
+            rwtEngineProgramId: programIds.rwtEngine,
             includeNav: false, // 60s cadence — NAV doesn't drift fast enough
           });
           this.state.rpcFailures = 0;

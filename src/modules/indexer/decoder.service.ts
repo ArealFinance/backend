@@ -1,12 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { decodeTransactionEvents, type DecodedEvent as SdkDecodedEvent } from '@areal/sdk/events';
-import {
-  FUTARCHY_PROGRAM_ID,
-  NATIVE_DEX_PROGRAM_ID,
-  OWNERSHIP_TOKEN_PROGRAM_ID,
-  RWT_ENGINE_PROGRAM_ID,
-  YIELD_DISTRIBUTION_PROGRAM_ID,
-} from '@areal/sdk/network';
+import { getProgramIds, type ClusterName } from '@areal/sdk/network';
 import { PublicKey } from '@solana/web3.js';
 
 /**
@@ -22,7 +17,9 @@ import { PublicKey } from '@solana/web3.js';
  *      changing one file);
  *   2. expose the canonical list of registered program IDs in one place
  *      (used by `ChainListenerService` to subscribe, by `BackfillService`
- *      to seed the historical sweep, etc).
+ *      to seed the historical sweep, etc) — RESOLVED PER-CLUSTER from
+ *      `solana.cluster` config so the devnet indexer subscribes to devnet
+ *      pubkeys, not mainnet ones.
  *
  * Re-exports `DecodedEvent` from the SDK so downstream files (persister,
  * tests) keep importing the type from a single backend-local path.
@@ -36,27 +33,36 @@ import { PublicKey } from '@solana/web3.js';
  */
 export type DecodedEvent = SdkDecodedEvent;
 
-const REGISTERED_PROGRAM_IDS: readonly PublicKey[] = [
-  NATIVE_DEX_PROGRAM_ID,
-  OWNERSHIP_TOKEN_PROGRAM_ID,
-  RWT_ENGINE_PROGRAM_ID,
-  YIELD_DISTRIBUTION_PROGRAM_ID,
-  FUTARCHY_PROGRAM_ID,
-];
-
 @Injectable()
 export class DecoderService {
   private readonly logger = new Logger(DecoderService.name);
+  private readonly registeredProgramIds: readonly PublicKey[];
 
-  constructor() {
+  constructor(private readonly configService: ConfigService) {
+    // Resolve the cluster from config (set by SOLANA_CLUSTER env). Fall back
+    // to devnet to match the rest of the backend's default — never to
+    // mainnet, which would silently subscribe to the wrong .so addresses
+    // and yield a blind indexer.
+    const cluster = (this.configService.get<string>('solana.cluster') ??
+      'devnet') as ClusterName;
+    const ids = getProgramIds(cluster);
+    this.registeredProgramIds = [
+      ids.nativeDex,
+      ids.ownershipToken,
+      ids.rwtEngine,
+      ids.yieldDistribution,
+      ids.futarchy,
+    ];
     this.logger.log(
-      `decoder facade ready — delegating to @areal/sdk/events for ${REGISTERED_PROGRAM_IDS.length} programs`,
+      `decoder facade ready — cluster=${cluster}, ${this.registeredProgramIds.length} programs: ${this.registeredProgramIds
+        .map((p) => p.toBase58())
+        .join(', ')}`,
     );
   }
 
   /** Returns the list of program IDs the indexer is configured for. */
   getRegisteredProgramIds(): readonly PublicKey[] {
-    return REGISTERED_PROGRAM_IDS;
+    return this.registeredProgramIds;
   }
 
   /**
