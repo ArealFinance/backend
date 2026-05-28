@@ -129,8 +129,19 @@ export function requireBigStr(data: Record<string, unknown>, key: string): strin
 }
 
 /**
- * For fields that the IDL types as `u8` / `u16` / `u32` and the persister
- * kept as native JS `number`. Returns a JS number (not a string).
+ * For fields that the IDL types as `u8` / `u16` / `u32` (and occasionally
+ * `u64` that the schema column keeps as JS `number` — e.g. distribution_count
+ * — never realistically exceeds 2^31 within service lifetime).
+ *
+ * Accepts:
+ *   - JS `number` (already-integer)
+ *   - decimal-string (`"123"`)
+ *   - `bigint` (when called pre-persister-normalization with raw decoder
+ *     output — matches `requireBigStr`'s bigint branch for symmetry).
+ *
+ * Returns a JS number (not a string). Throws when the value is outside the
+ * `Number.isSafeInteger` range — callers that need full u64 should use
+ * `requireBigStr` instead.
  */
 export function requireInt(data: Record<string, unknown>, key: string): number {
   const v = data[key];
@@ -138,6 +149,11 @@ export function requireInt(data: Record<string, unknown>, key: string): number {
   if (typeof v === 'string' && /^-?\d+$/.test(v)) {
     const n = Number(v);
     if (Number.isSafeInteger(n)) return n;
+  }
+  if (typeof v === 'bigint') {
+    const MIN = BigInt(Number.MIN_SAFE_INTEGER);
+    const MAX = BigInt(Number.MAX_SAFE_INTEGER);
+    if (v >= MIN && v <= MAX) return Number(v);
   }
   throw new Error(`projector: missing/non-integer (small) field "${key}"`);
 }
