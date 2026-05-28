@@ -5,8 +5,13 @@ import { Keypair } from '@solana/web3.js';
 import type { SolanaCluster } from '../../config/configuration.js';
 import { FaucetController } from './faucet.controller.js';
 import { FaucetService } from './faucet.service.js';
-import { resolveExpectedAuthority } from './faucet.constants.js';
-import { FAUCET_AUTHORITY_KEYPAIR, FAUCET_FUNDER_KEYPAIR } from './keypair.tokens.js';
+import { RwtFaucetService } from './rwt-faucet.service.js';
+import { resolveExpectedAuthority, resolveExpectedRwtTreasury } from './faucet.constants.js';
+import {
+  FAUCET_AUTHORITY_KEYPAIR,
+  FAUCET_FUNDER_KEYPAIR,
+  FAUCET_RWT_TREASURY_KEYPAIR,
+} from './keypair.tokens.js';
 import { faucetRedisProvider } from './redis.provider.js';
 import { loadKeypairFromB64Env } from './spl/keypair-loader.js';
 
@@ -48,9 +53,7 @@ export function buildFaucetAuthorityKeypair(config: ConfigService): Keypair | nu
     'FAUCET_USDC_AUTHORITY',
     config,
   );
-  const expected = resolveExpectedAuthority(
-    config.get<string>('faucet.usdcAuthorityPubkey'),
-  );
+  const expected = resolveExpectedAuthority(config.get<string>('faucet.usdcAuthorityPubkey'));
   const actual = kp.publicKey.toBase58();
   if (actual !== expected) {
     throw new Error(
@@ -67,18 +70,54 @@ const authorityKeypairProvider: FactoryProvider<Keypair | null> = {
   useFactory: buildFaucetAuthorityKeypair,
 };
 
+/**
+ * Build the RWT treasury keypair from env. Returns `null` outside
+ * devnet/localnet so an internal caller can never accidentally drain a
+ * real-mint treasury. On devnet/localnet the keypair MUST decode to the
+ * expected treasury pubkey (env-supplied or fallback constant), else
+ * boot fails — same anti-drift discipline as the USDC authority pin.
+ *
+ * Exported so the boot-time safety pin can be unit-tested without
+ * standing up the whole module (which would open a real Redis connection).
+ */
+export function buildRwtTreasuryKeypair(config: ConfigService): Keypair | null {
+  const cluster = config.get<SolanaCluster>('solana.cluster');
+  if (cluster !== 'devnet' && cluster !== 'localnet') return null;
+  const logger = new Logger('FaucetModule');
+  const kp = loadKeypairFromB64Env(
+    'FAUCET_RWT_TREASURY_KEYPAIR_B64',
+    'FAUCET_RWT_TREASURY',
+    config,
+  );
+  const expected = resolveExpectedRwtTreasury(config.get<string>('faucet.rwtTreasuryPubkey'));
+  const actual = kp.publicKey.toBase58();
+  if (actual !== expected) {
+    throw new Error(
+      `FAUCET_RWT_TREASURY pubkey mismatch: expected ${expected}, got ${actual} — refusing to boot`,
+    );
+  }
+  logger.log(`Faucet RWT treasury loaded: ${actual}`);
+  return kp;
+}
+
+const rwtTreasuryKeypairProvider: FactoryProvider<Keypair | null> = {
+  provide: FAUCET_RWT_TREASURY_KEYPAIR,
+  inject: [ConfigService],
+  useFactory: buildRwtTreasuryKeypair,
+};
+
 const funderKeypairProvider: FactoryProvider<Keypair | null> = {
   provide: FAUCET_FUNDER_KEYPAIR,
   inject: [ConfigService],
   useFactory: (config: ConfigService): Keypair | null => {
+    // The funder pays SOL fees + ATA-create rent for both faucets, so it
+    // must be loaded on any cluster where ANY faucet route is enabled.
+    // Today that's localnet (USDC) and devnet (RWT). Mainnet still gets
+    // `null` here — keeps the "no funder == no faucet" safety invariant.
     const cluster = config.get<SolanaCluster>('solana.cluster');
-    if (cluster !== 'localnet') return null;
+    if (cluster !== 'localnet' && cluster !== 'devnet') return null;
     const logger = new Logger('FaucetModule');
-    const kp = loadKeypairFromB64Env(
-      'FAUCET_SOL_FUNDER_KEYPAIR_B64',
-      'FAUCET_SOL_FUNDER',
-      config,
-    );
+    const kp = loadKeypairFromB64Env('FAUCET_SOL_FUNDER_KEYPAIR_B64', 'FAUCET_SOL_FUNDER', config);
     logger.log(`Faucet SOL funder loaded: ${kp.publicKey.toBase58()}`);
     return kp;
   },
@@ -88,8 +127,10 @@ const funderKeypairProvider: FactoryProvider<Keypair | null> = {
   controllers: [FaucetController],
   providers: [
     FaucetService,
+    RwtFaucetService,
     faucetRedisProvider,
     authorityKeypairProvider,
+    rwtTreasuryKeypairProvider,
     funderKeypairProvider,
   ],
 })

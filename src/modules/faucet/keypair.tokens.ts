@@ -9,3 +9,15 @@
  */
 export const FAUCET_AUTHORITY_KEYPAIR = Symbol('FAUCET_AUTHORITY_KEYPAIR');
 export const FAUCET_FUNDER_KEYPAIR = Symbol('FAUCET_FUNDER_KEYPAIR');
+
+/**
+ * RWT treasury signer — owns the pre-funded treasury ATA from which the
+ * RWT faucet transfers drips. Distinct from `FAUCET_AUTHORITY_KEYPAIR`
+ * because the RWT mint authority lives on-chain in the RWT engine PDA;
+ * the faucet does NOT have mint authority and must use SPL Transfer
+ * from a treasury ATA instead of MintTo.
+ *
+ * Returns `null` outside devnet/localnet so an internal caller can never
+ * accidentally drain a real treasury ATA.
+ */
+export const FAUCET_RWT_TREASURY_KEYPAIR = Symbol('FAUCET_RWT_TREASURY_KEYPAIR');

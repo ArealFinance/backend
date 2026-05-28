@@ -2,8 +2,8 @@ import { ConfigService } from '@nestjs/config';
 import { Keypair } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { buildFaucetAuthorityKeypair } from './faucet.module.js';
-import { DEFAULT_EXPECTED_AUTHORITY } from './faucet.constants.js';
+import { buildFaucetAuthorityKeypair, buildRwtTreasuryKeypair } from './faucet.module.js';
+import { DEFAULT_EXPECTED_AUTHORITY, DEFAULT_EXPECTED_RWT_TREASURY } from './faucet.constants.js';
 
 /**
  * Boot-time safety pin for the faucet USDC authority.
@@ -90,6 +90,65 @@ describe('buildFaucetAuthorityKeypair (boot-time authority pin)', () => {
     });
     expect(() => buildFaucetAuthorityKeypair(config)).toThrow(
       new RegExp(`expected ${DEFAULT_EXPECTED_AUTHORITY}`),
+    );
+  });
+});
+
+describe('buildRwtTreasuryKeypair (boot-time RWT treasury pin)', () => {
+  it('returns null on mainnet (RWT faucet disabled)', () => {
+    const kp = Keypair.generate();
+    const config = stubConfig({
+      'solana.cluster': 'mainnet',
+      FAUCET_RWT_TREASURY_KEYPAIR_B64: kpToB64(kp),
+    });
+    expect(buildRwtTreasuryKeypair(config)).toBeNull();
+  });
+
+  it('loads the keypair on devnet when it matches the env-supplied expected pubkey', () => {
+    const kp = Keypair.generate();
+    const config = stubConfig({
+      'solana.cluster': 'devnet',
+      'faucet.rwtTreasuryPubkey': kp.publicKey.toBase58(),
+      FAUCET_RWT_TREASURY_KEYPAIR_B64: kpToB64(kp),
+    });
+    const loaded = buildRwtTreasuryKeypair(config);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.publicKey.toBase58()).toBe(kp.publicKey.toBase58());
+  });
+
+  it('loads the keypair on localnet when it matches the env-supplied expected pubkey', () => {
+    const kp = Keypair.generate();
+    const config = stubConfig({
+      'solana.cluster': 'localnet',
+      'faucet.rwtTreasuryPubkey': kp.publicKey.toBase58(),
+      FAUCET_RWT_TREASURY_KEYPAIR_B64: kpToB64(kp),
+    });
+    const loaded = buildRwtTreasuryKeypair(config);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.publicKey.toBase58()).toBe(kp.publicKey.toBase58());
+  });
+
+  it('refuses to boot when the keypair does NOT match the env-supplied pubkey', () => {
+    const wrongKp = Keypair.generate();
+    const expectedPubkey = Keypair.generate().publicKey.toBase58();
+    const config = stubConfig({
+      'solana.cluster': 'devnet',
+      'faucet.rwtTreasuryPubkey': expectedPubkey,
+      FAUCET_RWT_TREASURY_KEYPAIR_B64: kpToB64(wrongKp),
+    });
+    expect(() => buildRwtTreasuryKeypair(config)).toThrow(/pubkey mismatch/i);
+    expect(() => buildRwtTreasuryKeypair(config)).toThrow(new RegExp(`expected ${expectedPubkey}`));
+  });
+
+  it('falls back to DEFAULT_EXPECTED_RWT_TREASURY when the env pubkey is unset', () => {
+    const randomKp = Keypair.generate();
+    const config = stubConfig({
+      'solana.cluster': 'devnet',
+      // faucet.rwtTreasuryPubkey intentionally absent
+      FAUCET_RWT_TREASURY_KEYPAIR_B64: kpToB64(randomKp),
+    });
+    expect(() => buildRwtTreasuryKeypair(config)).toThrow(
+      new RegExp(`expected ${DEFAULT_EXPECTED_RWT_TREASURY}`),
     );
   });
 });

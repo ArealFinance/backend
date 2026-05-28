@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Mock } from 'vitest';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 
-import { LocalnetOnlyGuard } from './faucet.guard.js';
+import { DevnetOrLocalnetGuard, LocalnetOnlyGuard } from './faucet.guard.js';
 import type { SolanaCluster } from '../../config/configuration.js';
 
 /**
@@ -93,6 +93,48 @@ describe('LocalnetOnlyGuard', () => {
 
     guard.canActivate(mockContext);
 
-    expect((mockConfigService.get as unknown as Mock)).toHaveBeenCalledWith('solana.cluster');
+    expect(mockConfigService.get as unknown as Mock).toHaveBeenCalledWith('solana.cluster');
+  });
+});
+
+describe('DevnetOrLocalnetGuard', () => {
+  function makeGuard(cluster: SolanaCluster): DevnetOrLocalnetGuard {
+    const config = {
+      get: (_key: string) => cluster,
+    } as unknown as ConfigService;
+    return new DevnetOrLocalnetGuard(config);
+  }
+
+  const mockContext = {
+    switchToHttp: () => ({ getRequest: () => ({}) }),
+  } as any;
+
+  it('should return true for localnet', () => {
+    expect(makeGuard('localnet').canActivate(mockContext)).toBe(true);
+  });
+
+  it('should return true for devnet', () => {
+    expect(makeGuard('devnet').canActivate(mockContext)).toBe(true);
+  });
+
+  it('should throw NotFoundException for mainnet', () => {
+    expect(() => makeGuard('mainnet').canActivate(mockContext)).toThrow(NotFoundException);
+  });
+
+  it('should throw NotFoundException for testnet', () => {
+    expect(() => makeGuard('testnet' as SolanaCluster).canActivate(mockContext)).toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('should read cluster config from ConfigService', () => {
+    const mockConfigService = {
+      get: vi.fn().mockReturnValue('devnet'),
+    } as unknown as ConfigService;
+    const guard = new DevnetOrLocalnetGuard(mockConfigService);
+
+    guard.canActivate(mockContext);
+
+    expect(mockConfigService.get as unknown as Mock).toHaveBeenCalledWith('solana.cluster');
   });
 });

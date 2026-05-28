@@ -124,6 +124,13 @@ export default () => {
       // tracks it without a code change. Falls back to
       // DEFAULT_EXPECTED_AUTHORITY in faucet.constants.ts when unset.
       usdcAuthorityPubkey: process.env.FAUCET_USDC_AUTHORITY,
+      // RWT faucet (devnet) — base64 of the deployer keypair that owns the
+      // pre-funded RWT treasury ATA. Same anti-drift pattern as the USDC
+      // authority pin: the expected pubkey is sourced from
+      // FAUCET_RWT_TREASURY, falling back to
+      // DEFAULT_EXPECTED_RWT_TREASURY in faucet.constants.ts.
+      rwtTreasuryKeypairB64: process.env.FAUCET_RWT_TREASURY_KEYPAIR_B64,
+      rwtTreasuryPubkey: process.env.FAUCET_RWT_TREASURY,
     },
   };
 };

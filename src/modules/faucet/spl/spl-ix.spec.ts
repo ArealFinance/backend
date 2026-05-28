@@ -5,6 +5,7 @@ import {
   findAta,
   buildCreateAtaIx,
   buildMintToIx,
+  buildTransferIx,
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   SYSTEM_PROGRAM_ID,
@@ -227,6 +228,89 @@ describe('SPL Instruction Builders', () => {
       const ix = buildMintToIx(authority, mint, dest, amount);
 
       expect(ix.data.length).toBe(9);
+    });
+  });
+
+  describe('buildTransferIx', () => {
+    it('should build Transfer instruction with correct program ID', () => {
+      const source = Keypair.generate().publicKey;
+      const destination = Keypair.generate().publicKey;
+      const owner = Keypair.generate().publicKey;
+      const amountBase = 100_000_000n;
+
+      const ix = buildTransferIx({ source, destination, owner, amountBase });
+
+      expect(ix.programId.toBase58()).toBe(TOKEN_PROGRAM_ID.toBase58());
+    });
+
+    it('should have 3 account keys in correct order (source, dest, owner-signer)', () => {
+      const source = Keypair.generate().publicKey;
+      const destination = Keypair.generate().publicKey;
+      const owner = Keypair.generate().publicKey;
+      const amountBase = 100_000_000n;
+
+      const ix = buildTransferIx({ source, destination, owner, amountBase });
+
+      expect(ix.keys.length).toBe(3);
+
+      expect(ix.keys[0].pubkey.toBase58()).toBe(source.toBase58());
+      expect(ix.keys[0].isWritable).toBe(true);
+      expect(ix.keys[0].isSigner).toBe(false);
+
+      expect(ix.keys[1].pubkey.toBase58()).toBe(destination.toBase58());
+      expect(ix.keys[1].isWritable).toBe(true);
+      expect(ix.keys[1].isSigner).toBe(false);
+
+      expect(ix.keys[2].pubkey.toBase58()).toBe(owner.toBase58());
+      expect(ix.keys[2].isSigner).toBe(true);
+      expect(ix.keys[2].isWritable).toBe(false);
+    });
+
+    it('should encode opcode 3 as first byte', () => {
+      const source = Keypair.generate().publicKey;
+      const destination = Keypair.generate().publicKey;
+      const owner = Keypair.generate().publicKey;
+      const amountBase = 100_000_000n;
+
+      const ix = buildTransferIx({ source, destination, owner, amountBase });
+
+      expect(ix.data[0]).toBe(3);
+    });
+
+    it('should encode amount as u64 little-endian (data length 9)', () => {
+      const source = Keypair.generate().publicKey;
+      const destination = Keypair.generate().publicKey;
+      const owner = Keypair.generate().publicKey;
+      const amountBase = 100_000_000n;
+
+      const ix = buildTransferIx({ source, destination, owner, amountBase });
+
+      expect(ix.data.length).toBe(9);
+      const decoded = ix.data.readBigUInt64LE(1);
+      expect(decoded).toBe(amountBase);
+    });
+
+    it('should handle zero amount', () => {
+      const source = Keypair.generate().publicKey;
+      const destination = Keypair.generate().publicKey;
+      const owner = Keypair.generate().publicKey;
+
+      const ix = buildTransferIx({ source, destination, owner, amountBase: 0n });
+
+      const decoded = ix.data.readBigUInt64LE(1);
+      expect(decoded).toBe(0n);
+    });
+
+    it('should handle large amounts (near u64 max)', () => {
+      const source = Keypair.generate().publicKey;
+      const destination = Keypair.generate().publicKey;
+      const owner = Keypair.generate().publicKey;
+      const amountBase = 18_000_000_000_000_000_000n;
+
+      const ix = buildTransferIx({ source, destination, owner, amountBase });
+
+      const decoded = ix.data.readBigUInt64LE(1);
+      expect(decoded).toBe(amountBase);
     });
   });
 

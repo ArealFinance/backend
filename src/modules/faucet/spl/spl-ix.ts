@@ -85,3 +85,43 @@ export function buildMintToIx(
     data,
   });
 }
+
+/**
+ * Build a `Token::Transfer` instruction (opcode 3). Data layout:
+ *   [u8(3), u64-le(amountBase)]
+ *
+ * Used when the faucet does NOT hold mint authority (e.g. RWT on devnet,
+ * whose mint authority lives on-chain in the RWT engine PDA). Instead the
+ * faucet transfers from a pre-funded treasury ATA. `source` is the owner's
+ * (treasury's) ATA, `destination` is the recipient's ATA, `owner` is the
+ * treasury signer.
+ *
+ * NOTE: we use the legacy Transfer opcode (3), not TransferChecked (12).
+ * TransferChecked validates the mint+decimals at the program level — a nice
+ * defense — but requires the mint account in the keys list AND callers must
+ * pass `decimals`. Since the mint and decimals are pinned at module-load by
+ * the boot-time safety pin (we refuse to boot if the treasury keypair's ATA
+ * is not the one we expect against the pinned mint), the extra account read
+ * isn't load-bearing. Keep this in mind if Token-2022 (which deprecates
+ * Transfer) ever becomes in-scope.
+ */
+export function buildTransferIx(params: {
+  source: PublicKey;
+  destination: PublicKey;
+  owner: PublicKey;
+  amountBase: bigint;
+}): TransactionInstruction {
+  const { source, destination, owner, amountBase } = params;
+  const data = Buffer.alloc(9);
+  data.writeUInt8(3, 0);
+  data.writeBigUInt64LE(amountBase, 1);
+  return new TransactionInstruction({
+    keys: [
+      { pubkey: source, isSigner: false, isWritable: true },
+      { pubkey: destination, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+    ],
+    programId: TOKEN_PROGRAM_ID,
+    data,
+  });
+}

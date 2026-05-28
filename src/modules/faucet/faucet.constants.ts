@@ -1,4 +1,4 @@
-import { USDC_MINTS } from '@areal/sdk/network';
+import { RWT_MINTS, USDC_MINTS } from '@areal/sdk/network';
 
 /**
  * Faucet module constants.
@@ -35,8 +35,7 @@ export const USDC_MINT_PUBKEY = USDC_MINTS.localnet.toBase58();
  * still pins to the right signer; on a reset, set `FAUCET_USDC_AUTHORITY`
  * to the new deployer pubkey rather than editing this file.
  */
-export const DEFAULT_EXPECTED_AUTHORITY =
-  'CRAKiyq2eau8fiNxH2DMhTzry2Jn3kKmXnhZGnbdyFvp';
+export const DEFAULT_EXPECTED_AUTHORITY = 'CRAKiyq2eau8fiNxH2DMhTzry2Jn3kKmXnhZGnbdyFvp';
 
 /**
  * Resolve the boot-time expected authority pubkey.
@@ -68,3 +67,50 @@ export const RATE_LIMIT_TTL_SEC = 86_400;
 
 /** Single-flight lock TTL, in seconds. */
 export const LOCK_TTL_SEC = 30;
+
+// ---------------------------------------------------------------------------
+// RWT faucet constants (devnet-gated SPL Transfer from treasury ATA).
+//
+// Distinct from the USDC faucet because:
+//   - RWT mint authority lives on-chain in the RWT engine PDA (not deployer),
+//     so the faucet CANNOT use MintTo. Instead it transfers from a pre-funded
+//     treasury ATA owned by the deployer.
+//   - The RWT faucet is enabled on devnet (the USDC one is localnet-only).
+//   - Mint and treasury authority are sourced via the SDK / env, mirroring
+//     the USDC anti-drift pattern.
+// ---------------------------------------------------------------------------
+
+/** Devnet RWT mint pubkey, sourced from the SDK. */
+export const RWT_MINT_PUBKEY = RWT_MINTS.devnet.toBase58();
+
+/** RWT has 6 decimals (matches the devnet on-chain mint). */
+export const RWT_DECIMALS = 6;
+
+/** Default RWT faucet drip amount, in whole RWT. */
+export const DEFAULT_RWT_AMOUNT = 100;
+
+/** Hard ceiling on a single RWT drip request, in whole RWT. */
+export const MAX_RWT_AMOUNT = 1_000;
+
+/**
+ * Default expected RWT treasury authority pubkey — the devnet deployer that
+ * holds the pre-funded RWT ATA at `78xAMq2cGKMumgDoAHiHJZxC3MD55Q1qEEiyQPvoLoMc`.
+ *
+ * Same fallback / env-override pattern as `DEFAULT_EXPECTED_AUTHORITY` — see
+ * `resolveExpectedRwtTreasury`. On a deployer rotation, set
+ * `FAUCET_RWT_TREASURY` in the env to the new pubkey rather than editing
+ * this file.
+ */
+export const DEFAULT_EXPECTED_RWT_TREASURY = '8ddRxwGnC1MD5ZCf22eLAne77Rput8itQbTjMr93xYvq';
+
+/**
+ * Resolve the boot-time expected RWT treasury authority pubkey.
+ *
+ * Precedence: `FAUCET_RWT_TREASURY` env > `DEFAULT_EXPECTED_RWT_TREASURY`
+ * fallback. Same anti-drift property as `resolveExpectedAuthority` — a
+ * deployer rotation propagates via env without a code change.
+ */
+export function resolveExpectedRwtTreasury(envValue?: string | null): string {
+  const trimmed = envValue?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_EXPECTED_RWT_TREASURY;
+}

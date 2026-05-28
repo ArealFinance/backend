@@ -22,3 +22,26 @@ export class LocalnetOnlyGuard implements CanActivate {
     return true;
   }
 }
+
+/**
+ * Hard-gate the RWT faucet endpoint to devnet or localnet. Mainnet
+ * MUST 404 — same 404-not-Forbidden discipline as `LocalnetOnlyGuard`,
+ * and same pair with the module-level keypair guard that returns `null`
+ * outside the allowed clusters.
+ *
+ * Localnet is included so a local dev stack can exercise the RWT path
+ * without standing up devnet, provided the operator wires
+ * `FAUCET_RWT_TREASURY_KEYPAIR_B64` for the local deployer.
+ */
+@Injectable()
+export class DevnetOrLocalnetGuard implements CanActivate {
+  constructor(private readonly configService: ConfigService) {}
+
+  canActivate(_context: ExecutionContext): boolean {
+    const cluster = this.configService.get<SolanaCluster>('solana.cluster');
+    if (cluster !== 'devnet' && cluster !== 'localnet') {
+      throw new NotFoundException();
+    }
+    return true;
+  }
+}
