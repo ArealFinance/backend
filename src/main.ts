@@ -43,8 +43,11 @@ const PROD_ALLOWED_ORIGINS = [
   'https://areal.finance',
   'https://www.areal.finance',
   'https://app.areal.finance',
-  // Earn app.
+  // Earn app. `earn.areal.finance` is the canonical custom domain;
+  // `earn-areal.pages.dev` is the Cloudflare Pages default domain (used for
+  // testing before the custom domain is attached) — both stay allow-listed.
   'https://earn.areal.finance',
+  'https://earn-areal.pages.dev',
   // Ops panel.
   'https://panel.areal.finance',
 ];
