@@ -114,3 +114,76 @@ export function resolveExpectedRwtTreasury(envValue?: string | null): string {
   const trimmed = envValue?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_EXPECTED_RWT_TREASURY;
 }
+
+// ---------------------------------------------------------------------------
+// Earn-USDC faucet constants (devnet-gated MintTo signed by the earn deployer).
+//
+// Distinct from the localnet USDC faucet AND the RWT faucet because:
+//   - This is the EARN-app test USDC mint, a SEPARATE mint from the main-app
+//     USDC (`USDC_MINTS.devnet` = `E4HJu85Z…`). We deliberately do NOT source
+//     it from `@areal/sdk` — that table points at the main-app mint. The earn
+//     mint is pinned here as a literal with a `FAUCET_EARN_USDC_MINT` env
+//     override for forward flexibility.
+//   - The earn deployer HOLDS the mint authority of the earn USDC mint, so the
+//     faucet uses MintTo (mint-from-thin-air) like the localnet USDC faucet —
+//     NOT the treasury-Transfer path the RWT faucet uses.
+//   - Enabled on devnet/localnet (mainnet 404s).
+//   - The signing deployer is the SAME keypair as the RWT treasury role
+//     (`DEFAULT_EXPECTED_RWT_TREASURY`), but it is injected under a DISTINCT
+//     DI token so the boot-time pin / gate stays independent of the RWT path.
+// ---------------------------------------------------------------------------
+
+/**
+ * Earn-USDC mint pubkey (devnet), 6 decimals.
+ *
+ * Pinned as a literal — NOT sourced from `@areal/sdk` — because the SDK's
+ * `USDC_MINTS.devnet` is the main-app USDC mint (`E4HJu85Z…`), a different
+ * token. The earn vault was bootstrapped against this dedicated mint. Override
+ * via `FAUCET_EARN_USDC_MINT` if the earn stack is re-bootstrapped onto a new
+ * mint (see `resolveEarnUsdcMint`).
+ */
+export const EARN_USDC_MINT_PUBKEY = '5rrpFYYVkwGMeTTCox3EE4VBNvkYMCQmxkYJhS9TA4Wx';
+
+/**
+ * Resolve the earn-USDC mint pubkey.
+ *
+ * Precedence: `FAUCET_EARN_USDC_MINT` env > `EARN_USDC_MINT_PUBKEY` literal.
+ * Mirrors the env-override discipline of the authority pins so a re-bootstrap
+ * that rotates the earn mint propagates without a code change.
+ */
+export function resolveEarnUsdcMint(envValue?: string | null): string {
+  const trimmed = envValue?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : EARN_USDC_MINT_PUBKEY;
+}
+
+/** Earn USDC has 6 decimals (matches the devnet on-chain mint). */
+export const EARN_USDC_DECIMALS = 6;
+
+/** Default earn-USDC faucet drip amount, in whole USDC (= raw 100_000_000 at 6 dec). */
+export const DEFAULT_EARN_USDC_AMOUNT = 100;
+
+/** Hard ceiling on a single earn-USDC drip request, in whole USDC (= raw 1_000_000_000 at 6 dec). */
+export const MAX_EARN_USDC_AMOUNT = 1_000;
+
+/**
+ * Default expected earn-USDC mint-authority pubkey — the earn devnet deployer
+ * that created the earn USDC mint and holds its mint authority.
+ *
+ * Same fallback / env-override pattern as `DEFAULT_EXPECTED_AUTHORITY` — see
+ * `resolveExpectedEarnUsdcAuthority`. This is the SAME deployer pubkey as
+ * `DEFAULT_EXPECTED_RWT_TREASURY`, but kept as a separate constant + DI token
+ * so the two roles can diverge independently on a future rotation. On a
+ * deployer rotation, set `FAUCET_EARN_USDC_AUTHORITY` rather than editing this.
+ */
+export const DEFAULT_EXPECTED_EARN_USDC_AUTHORITY = '8ddRxwGnC1MD5ZCf22eLAne77Rput8itQbTjMr93xYvq';
+
+/**
+ * Resolve the boot-time expected earn-USDC authority pubkey.
+ *
+ * Precedence: `FAUCET_EARN_USDC_AUTHORITY` env > `DEFAULT_EXPECTED_EARN_USDC_AUTHORITY`
+ * fallback. Same anti-drift property as `resolveExpectedAuthority`.
+ */
+export function resolveExpectedEarnUsdcAuthority(envValue?: string | null): string {
+  const trimmed = envValue?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_EXPECTED_EARN_USDC_AUTHORITY;
+}

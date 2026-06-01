@@ -21,3 +21,18 @@ export const FAUCET_FUNDER_KEYPAIR = Symbol('FAUCET_FUNDER_KEYPAIR');
  * accidentally drain a real treasury ATA.
  */
 export const FAUCET_RWT_TREASURY_KEYPAIR = Symbol('FAUCET_RWT_TREASURY_KEYPAIR');
+
+/**
+ * Earn-USDC mint authority signer — the earn devnet deployer that holds the
+ * mint authority of the earn USDC mint. The earn faucet uses MintTo (the
+ * deployer CAN mint), unlike the RWT faucet which transfers from a treasury.
+ *
+ * Kept DISTINCT from `FAUCET_RWT_TREASURY_KEYPAIR` even though both resolve to
+ * the same deployer keypair today: separate tokens keep each faucet's boot-time
+ * pin and cluster gate independent, so a future rotation can move one role
+ * without disturbing the other.
+ *
+ * Returns `null` outside devnet/localnet so an internal caller can never
+ * accidentally mint earn-USDC against a real mint.
+ */
+export const FAUCET_EARN_USDC_AUTHORITY_KEYPAIR = Symbol('FAUCET_EARN_USDC_AUTHORITY_KEYPAIR');

@@ -131,6 +131,16 @@ export default () => {
       // DEFAULT_EXPECTED_RWT_TREASURY in faucet.constants.ts.
       rwtTreasuryKeypairB64: process.env.FAUCET_RWT_TREASURY_KEYPAIR_B64,
       rwtTreasuryPubkey: process.env.FAUCET_RWT_TREASURY,
+      // Earn-USDC faucet (devnet/localnet) — base64 of the earn deployer
+      // keypair that holds the mint authority of the earn USDC mint (MintTo).
+      // Same anti-drift pattern as the USDC authority pin: the expected pubkey
+      // is sourced from FAUCET_EARN_USDC_AUTHORITY, falling back to
+      // DEFAULT_EXPECTED_EARN_USDC_AUTHORITY in faucet.constants.ts. The earn
+      // mint itself is pinned as EARN_USDC_MINT_PUBKEY there, overridable via
+      // FAUCET_EARN_USDC_MINT (a SEPARATE mint from the main-app USDC).
+      earnUsdcAuthorityKeypairB64: process.env.FAUCET_EARN_USDC_AUTHORITY_KEYPAIR_B64,
+      earnUsdcAuthorityPubkey: process.env.FAUCET_EARN_USDC_AUTHORITY,
+      earnUsdcMint: process.env.FAUCET_EARN_USDC_MINT,
     },
   };
 };

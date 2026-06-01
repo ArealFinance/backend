@@ -6,9 +6,15 @@ import type { SolanaCluster } from '../../config/configuration.js';
 import { FaucetController } from './faucet.controller.js';
 import { FaucetService } from './faucet.service.js';
 import { RwtFaucetService } from './rwt-faucet.service.js';
-import { resolveExpectedAuthority, resolveExpectedRwtTreasury } from './faucet.constants.js';
+import { EarnUsdcFaucetService } from './earn-usdc-faucet.service.js';
+import {
+  resolveExpectedAuthority,
+  resolveExpectedEarnUsdcAuthority,
+  resolveExpectedRwtTreasury,
+} from './faucet.constants.js';
 import {
   FAUCET_AUTHORITY_KEYPAIR,
+  FAUCET_EARN_USDC_AUTHORITY_KEYPAIR,
   FAUCET_FUNDER_KEYPAIR,
   FAUCET_RWT_TREASURY_KEYPAIR,
 } from './keypair.tokens.js';
@@ -106,14 +112,55 @@ const rwtTreasuryKeypairProvider: FactoryProvider<Keypair | null> = {
   useFactory: buildRwtTreasuryKeypair,
 };
 
+/**
+ * Build the earn-USDC mint-authority keypair from env. Returns `null` outside
+ * devnet/localnet so an internal caller can never accidentally mint earn-USDC
+ * against a real mint. On devnet/localnet the keypair MUST decode to the
+ * expected earn authority pubkey (env-supplied or fallback constant), else boot
+ * fails — same anti-drift discipline as the USDC authority pin. The earn
+ * deployer HOLDS the mint authority (unlike the RWT treasury), so this faucet
+ * uses MintTo.
+ *
+ * Exported so the boot-time safety pin can be unit-tested without standing up
+ * the whole module (which would open a real Redis connection).
+ */
+export function buildEarnUsdcAuthorityKeypair(config: ConfigService): Keypair | null {
+  const cluster = config.get<SolanaCluster>('solana.cluster');
+  if (cluster !== 'devnet' && cluster !== 'localnet') return null;
+  const logger = new Logger('FaucetModule');
+  const kp = loadKeypairFromB64Env(
+    'FAUCET_EARN_USDC_AUTHORITY_KEYPAIR_B64',
+    'FAUCET_EARN_USDC_AUTHORITY',
+    config,
+  );
+  const expected = resolveExpectedEarnUsdcAuthority(
+    config.get<string>('faucet.earnUsdcAuthorityPubkey'),
+  );
+  const actual = kp.publicKey.toBase58();
+  if (actual !== expected) {
+    throw new Error(
+      `FAUCET_EARN_USDC_AUTHORITY pubkey mismatch: expected ${expected}, got ${actual} — refusing to boot`,
+    );
+  }
+  logger.log(`Faucet earn-USDC authority loaded: ${actual}`);
+  return kp;
+}
+
+const earnUsdcAuthorityKeypairProvider: FactoryProvider<Keypair | null> = {
+  provide: FAUCET_EARN_USDC_AUTHORITY_KEYPAIR,
+  inject: [ConfigService],
+  useFactory: buildEarnUsdcAuthorityKeypair,
+};
+
 const funderKeypairProvider: FactoryProvider<Keypair | null> = {
   provide: FAUCET_FUNDER_KEYPAIR,
   inject: [ConfigService],
   useFactory: (config: ConfigService): Keypair | null => {
-    // The funder pays SOL fees + ATA-create rent for both faucets, so it
+    // The funder pays SOL fees + ATA-create rent for all faucets, so it
     // must be loaded on any cluster where ANY faucet route is enabled.
-    // Today that's localnet (USDC) and devnet (RWT). Mainnet still gets
-    // `null` here — keeps the "no funder == no faucet" safety invariant.
+    // Today that's localnet (USDC) and devnet/localnet (RWT, earn-USDC).
+    // Mainnet still gets `null` here — keeps the "no funder == no faucet"
+    // safety invariant.
     const cluster = config.get<SolanaCluster>('solana.cluster');
     if (cluster !== 'localnet' && cluster !== 'devnet') return null;
     const logger = new Logger('FaucetModule');
@@ -128,9 +175,11 @@ const funderKeypairProvider: FactoryProvider<Keypair | null> = {
   providers: [
     FaucetService,
     RwtFaucetService,
+    EarnUsdcFaucetService,
     faucetRedisProvider,
     authorityKeypairProvider,
     rwtTreasuryKeypairProvider,
+    earnUsdcAuthorityKeypairProvider,
     funderKeypairProvider,
   ],
 })

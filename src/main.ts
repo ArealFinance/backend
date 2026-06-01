@@ -43,6 +43,8 @@ const PROD_ALLOWED_ORIGINS = [
   'https://areal.finance',
   'https://www.areal.finance',
   'https://app.areal.finance',
+  // Earn app.
+  'https://earn.areal.finance',
   // Ops panel.
   'https://panel.areal.finance',
 ];
