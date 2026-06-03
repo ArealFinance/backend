@@ -126,10 +126,12 @@ export const STAKING_CONFIG_SEED = Buffer.from('staking_config');
 
 const EARN_OFF = {
   totalInvestedCapital: 8, // u128
+  mintFeeBps: 122, // u16 (mint fee in basis points)
   basketVault: 124,
   daoFeeDestination: 156,
   rwtMint: 188,
   usdcMint: 220,
+  minMintAmount: 252, // u64 (anti-dust floor for mint_rwt — $1.00 in 6-dec)
 } as const;
 
 const STAKING_OFF = {
@@ -159,10 +161,13 @@ function readPubkey(buf: Buffer, off: number): PublicKey {
 /** Decoded EarnConfig fields the backend needs (NAV inputs + wiring). */
 export interface DecodedEarnConfig {
   totalInvestedCapital: bigint;
+  mintFeeBps: number;
   basketVault: PublicKey;
   daoFeeDestination: PublicKey;
   rwtMint: PublicKey;
   usdcMint: PublicKey;
+  /** Anti-dust floor enforced by mint_rwt (`BelowMinMint` if usdc_amount < this). */
+  minMintAmount: bigint;
 }
 
 /**
@@ -181,10 +186,12 @@ export function decodeEarnConfig(data: Buffer): DecodedEarnConfig {
   }
   return {
     totalInvestedCapital: readU128LE(data, EARN_OFF.totalInvestedCapital),
+    mintFeeBps: data.readUInt16LE(EARN_OFF.mintFeeBps),
     basketVault: readPubkey(data, EARN_OFF.basketVault),
     daoFeeDestination: readPubkey(data, EARN_OFF.daoFeeDestination),
     rwtMint: readPubkey(data, EARN_OFF.rwtMint),
     usdcMint: readPubkey(data, EARN_OFF.usdcMint),
+    minMintAmount: data.readBigUInt64LE(EARN_OFF.minMintAmount),
   };
 }
 

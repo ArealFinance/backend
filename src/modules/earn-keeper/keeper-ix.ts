@@ -29,6 +29,14 @@ const ADD_TO_BASKET_DISCRIMINATOR = Buffer.from([0x82, 0x9b, 0xd0, 0x92, 0xfe, 0
 /** `deposit_rewards` discriminator (staking program). */
 const DEPOSIT_REWARDS_DISCRIMINATOR = Buffer.from([0x34, 0xf9, 0x70, 0x48, 0xce, 0xa1, 0xc4, 0x01]);
 
+/**
+ * `mint_rwt` discriminator (earn program). Lifted verbatim from
+ * `scripts/lib/e2e-earn.ts` / `scripts/lib/seed-meteora-pool.ts`
+ * (MINT_RWT_DISCRIMINATOR), cross-checked against
+ * `contracts/earn/src/instructions/mint_rwt.rs`.
+ */
+const MINT_RWT_DISCRIMINATOR = Buffer.from([0x62, 0x20, 0x73, 0xde, 0x44, 0x0c, 0xa1, 0xa2]);
+
 function u64Le(amount: bigint): Buffer {
   const b = Buffer.alloc(8);
   b.writeBigUInt64LE(amount, 0);
@@ -100,5 +108,57 @@ export function buildDepositRewardsIx(params: {
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([DEPOSIT_REWARDS_DISCRIMINATOR, u64Le(params.rwtAmount)]),
+  });
+}
+
+/**
+ * Build an `earn::mint_rwt(usdc_amount, min_rwt_out)` instruction.
+ *
+ * The user (here the keeper's deployer) deposits `usdcAmount` earn-USDC and
+ * receives earn-RWT at the current Book NAV, minus a `mint_fee_bps` fee taken in
+ * USDC. The program mints the RWT (the EarnConfig PDA is the rwt_mint authority,
+ * which is exactly why the keeper can't raw-mint RWT itself — it must go through
+ * this user instruction). `minRwtOut` is the slippage floor (the handler rejects
+ * 0 as ZeroSlippage, so callers pass >= 1).
+ *
+ * Accounts (order from contracts/earn/src/instructions/mint_rwt.rs MintRwt struct):
+ *   0 user                signer
+ *   1 earn_config         writable
+ *   2 rwt_mint            writable   (supply grows)
+ *   3 user_usdc           writable   (USDC source: body + fee)
+ *   4 user_rwt            writable   (RWT destination)
+ *   5 basket_vault        writable   (USDC body destination — NAV backing)
+ *   6 dao_fee_destination writable   (USDC fee destination)
+ *   7 token_program       readonly
+ */
+export function buildMintRwtIx(params: {
+  earnProgramId: PublicKey;
+  user: PublicKey;
+  earnConfig: PublicKey;
+  rwtMint: PublicKey;
+  userUsdc: PublicKey;
+  userRwt: PublicKey;
+  basketVault: PublicKey;
+  daoFeeDestination: PublicKey;
+  usdcAmount: bigint;
+  minRwtOut: bigint;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: params.earnProgramId,
+    keys: [
+      { pubkey: params.user, isSigner: true, isWritable: false },
+      { pubkey: params.earnConfig, isSigner: false, isWritable: true },
+      { pubkey: params.rwtMint, isSigner: false, isWritable: true },
+      { pubkey: params.userUsdc, isSigner: false, isWritable: true },
+      { pubkey: params.userRwt, isSigner: false, isWritable: true },
+      { pubkey: params.basketVault, isSigner: false, isWritable: true },
+      { pubkey: params.daoFeeDestination, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      MINT_RWT_DISCRIMINATOR,
+      u64Le(params.usdcAmount),
+      u64Le(params.minRwtOut),
+    ]),
   });
 }

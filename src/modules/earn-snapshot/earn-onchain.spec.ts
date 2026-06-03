@@ -198,6 +198,14 @@ describe('earn-onchain: decoders', () => {
       expect(result.usdcMint.equals(usdcMintKp.publicKey)).toBe(true);
     });
 
+    it('reads minMintAmount from offset 252 as u64 LE', () => {
+      const buf = Buffer.alloc(261);
+      buf.write('8f6e3fb5958cbe90', 0, 'hex');
+      buf.writeBigUInt64LE(1_000_000n, 252); // $1.00 anti-dust floor
+      const result = decodeEarnConfig(buf);
+      expect(result.minMintAmount).toBe(1_000_000n);
+    });
+
     it('throws when buffer is too short', () => {
       const buf = Buffer.alloc(260); // 1 byte short
       buf.write('8f6e3fb5958cbe90', 0, 'hex');

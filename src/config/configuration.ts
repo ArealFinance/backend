@@ -165,6 +165,20 @@ export default () => {
       // Target APY in basis points (1200 = 12%/yr). Drives the per-minute
       // reward sizing for both deposit_rewards and add_to_basket.
       apyBps: asInt(process.env.DEVNET_YIELD_KEEPER_APY_BPS, 1200),
+      // RWT buffer sizing (replenish design). The per-tick `deposit_rewards`
+      // leg draws from the deployer's RWT ATA balance instead of a fresh
+      // per-tick mint (a dust mint would hit the contract's $1.00 min_mint
+      // floor and revert the whole tick). A SEPARATE replenish tx tops the ATA
+      // back up in ≥$1 chunks (mint_rwt) whenever it drops below the floor.
+      //
+      // `bufferTicks` = how many ticks of reward the buffer targets / replenish
+      // floor is sized to (default ~1 day at 1 tick/min = 1440). The replenish
+      // mints `bufferTicks × rwtReward` RWT; the floor is `floorTicks ×
+      // rwtReward` (replenish triggers when the ATA can't cover that many more
+      // ticks). The mint body is always raised to >= the on-chain min_mint
+      // floor so a replenish can never under-shoot and revert.
+      bufferTicks: asInt(process.env.DEVNET_YIELD_KEEPER_BUFFER_TICKS, 1_440),
+      floorTicks: asInt(process.env.DEVNET_YIELD_KEEPER_FLOOR_TICKS, 60),
       // base64 of the deployer keypair that signs keeper instructions. Reuses
       // the SAME deployer the faucet loads (8ddRxwGn…); falls back to the
       // faucet's RWT-treasury keypair env if the dedicated one is unset, so a

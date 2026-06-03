@@ -40,6 +40,7 @@ import {
   resolveStakingProgramId,
 } from '../earn-snapshot/earn-onchain.js';
 import { EarnKeeperService } from './earn-keeper.service.js';
+import { isAllowedDevnetRpc, isDevnetCluster, isRunnableCluster } from './keeper-gates.js';
 import { KEEPER_AUTHORITY_KEYPAIR } from './keeper.tokens.js';
 
 /** Expected devnet deployer pubkey — the keeper signer boot-time pin. */
@@ -97,12 +98,15 @@ export function assertDevnetPins(config: ConfigService): void {
   void new PublicKey(EARN_RWT_MINT);
   void new PublicKey(STRWT_MINT);
 
-  // Gate 4 (boot half) — on devnet, the RPC must look like devnet/localhost.
-  if (cluster === 'devnet') {
+  // Gate 4 (boot half) — on devnet, the RPC must be a host-anchored devnet host.
+  // A coincidental substring (e.g. a mainnet host with a `/devnet` path) is
+  // rejected: we parse the URL and match the EXACT hostname against the
+  // allowlist (see isAllowedDevnetRpc). Fail-closed.
+  if (isDevnetCluster(cluster)) {
     const rpcUrl = config.get<string>('solana.rpcUrl') ?? '';
-    if (!/devnet|localhost|127\.0\.0\.1/.test(rpcUrl)) {
+    if (!isAllowedDevnetRpc(rpcUrl)) {
       throw new Error(
-        'keeper Gate 4: cluster is devnet but RPC URL does not look like devnet/localhost — refusing to boot',
+        'keeper Gate 4: cluster is devnet but RPC URL host is not on the devnet allowlist — refusing to boot',
       );
     }
   }
@@ -118,8 +122,10 @@ export function assertDevnetPins(config: ConfigService): void {
  */
 export function buildKeeperAuthorityKeypair(config: ConfigService): Keypair | null {
   const cluster = config.get<SolanaCluster>('solana.cluster');
-  // Gate 1 — cluster gate. null off devnet/localnet → keeper inert.
-  if (cluster !== 'devnet' && cluster !== 'localnet') return null;
+  // Gate 1 — cluster gate (fail-closed). null off the recognised devnet/local
+  // clusters → keeper inert. A missing/typo'd cluster is NEVER coerced to
+  // devnet (isRunnableCluster only matches an explicit known value).
+  if (!isRunnableCluster(cluster)) return null;
 
   const logger = new Logger('EarnKeeperModule');
 
@@ -139,7 +145,7 @@ export function buildKeeperAuthorityKeypair(config: ConfigService): Keypair | nu
   // gatesPass enforces it; this is just an operator-facing boot log).
   const enabled = config.get<boolean>('earnKeeper.enabled');
   logger.log(
-    `keeper signer loaded: ${actual} (cluster=${cluster}, enabled=${enabled}) — keeper ${enabled && cluster === 'devnet' ? 'ACTIVE' : 'inert'}`,
+    `keeper signer loaded: ${actual} (cluster=${cluster}, enabled=${enabled}) — keeper ${enabled && isDevnetCluster(cluster) ? 'ACTIVE' : 'inert'}`,
   );
   return kp;
 }

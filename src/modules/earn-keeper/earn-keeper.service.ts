@@ -22,13 +22,17 @@ import { SOLANA_CONNECTION } from '../../common/solana/connection.module.js';
 import { buildMintToIx, findAta } from '../faucet/spl/spl-ix.js';
 import {
   EARN_CONFIG_SEED,
+  NAV_SCALE,
   STAKING_CONFIG_SEED,
+  calculateNav,
   decodeEarnConfig,
   decodeStakingConfig,
   resolveEarnProgramId,
   resolveStakingProgramId,
+  type DecodedEarnConfig,
 } from '../earn-snapshot/earn-onchain.js';
-import { buildAddToBasketIx, buildDepositRewardsIx } from './keeper-ix.js';
+import { buildAddToBasketIx, buildDepositRewardsIx, buildMintRwtIx } from './keeper-ix.js';
+import { isAllowedDevnetRpc, isDevnetCluster } from './keeper-gates.js';
 import { KEEPER_AUTHORITY_KEYPAIR } from './keeper.tokens.js';
 import type { SolanaCluster } from '../../config/configuration.js';
 
@@ -44,31 +48,84 @@ const BPS_DENOMINATOR = 10_000n;
 const MIN_REWARD_BASE_UNITS = 1n;
 
 /**
- * Devnet-only yield keeper.
+ * USDC body required (ceil) to mint at least `rwtOut` earn-RWT at Book NAV,
+ * inverting the program's `rwt_out = floor(usdc × NAV_SCALE / nav)`. Ceil-dividing
+ * guarantees the realised RWT out is >= rwtOut so the buffer never under-fills.
+ *   body = ceil(rwtOut × nav / NAV_SCALE)
+ */
+export function usdcBodyForRwtOut(rwtOut: bigint, nav: bigint): bigint {
+  return (rwtOut * nav + (NAV_SCALE - 1n)) / NAV_SCALE;
+}
+
+/**
+ * mint_rwt fee (ceil) on a USDC body at `feeBps`, mirroring the program's
+ * `fee = floor(usdc × fee_bps / 10_000)` but rounded UP so the deployer's minted
+ * USDC always covers body + fee (a tiny over-mint is harmless; an under-mint
+ * would fail the tx).
+ *   fee = ceil(body × feeBps / 10_000)
+ */
+export function mintRwtFeeCeil(body: bigint, feeBps: bigint): bigint {
+  return (body * feeBps + (BPS_DENOMINATOR - 1n)) / BPS_DENOMINATOR;
+}
+
+/**
+ * Replenish mint sizing.
  *
- * Per tick (1 min), when all gates pass:
- *   1. Read EarnConfig + StakingConfig on-chain (decode via pinned offsets).
- *   2. Compute per-minute rewards targeting `apyBps`:
- *        - deposit_rewards (raises rate): rwt ≈ total_rwt_active * apy / minPerYear
- *        - add_to_basket   (raises NAV) : usdc ≈ total_invested_capital * apy / minPerYear
- *   3. Source funds:
- *        - USDC for add_to_basket: MintTo into the deployer's USDC ATA (deployer
- *          IS the earn-USDC mint authority), then add_to_basket transfers it
- *          into basket_vault.
- *        - RWT for deposit_rewards: the deployer's pre-funded RWT ATA (the earn
- *          RWT mint authority is the EarnConfig PDA, NOT the deployer, so the
- *          keeper canNOT mint RWT — it draws from a pre-funded treasury). When
- *          the treasury runs low, the deposit_rewards instruction is skipped and
- *          a warning is logged; an operator tops up the deployer's RWT ATA.
- *   4. Batch MintTo + add_to_basket + deposit_rewards into ONE transaction (as
- *      many instructions as land in a single tx — they fit comfortably).
- *   5. Send + confirm; on any failure log + skip the tick (no crash, no retry).
+ * The replenish step tops the deployer's RWT buffer back up by minting a CHUNK
+ * via `mint_rwt`. The chunk targets `targetBufferRwt` RWT but the USDC body MUST
+ * clear the on-chain `min_mint_amount` floor (`BelowMinMint` otherwise), so:
+ *
+ *   body = max(min_mint_amount, ceil(targetBufferRwt × nav / NAV_SCALE))
+ *
+ * On a tiny pool the buffer target rounds to a sub-$1 body, so the `max` raises
+ * it to exactly $1.00 — the smallest legal mint — which still over-fills the
+ * buffer (harmless; the surplus just feeds more ticks before the next mint).
+ * Returns the body in USDC base units (the fee is computed separately on top).
+ */
+export function replenishMintBody(
+  targetBufferRwt: bigint,
+  nav: bigint,
+  minMintAmount: bigint,
+): bigint {
+  const navBody = usdcBodyForRwtOut(targetBufferRwt, nav);
+  return navBody > minMintAmount ? navBody : minMintAmount;
+}
+
+/**
+ * Devnet-only yield keeper (buffered / replenish design).
+ *
+ * Per tick (1 min), when all gates pass, TWO independent legs in ONE tx —
+ * neither can hit the contract's `min_mint_amount` floor, so neither reverts:
+ *
+ *   1. add_to_basket(usdcReward) — raises Book NAV. Source: MintTo `usdcReward`
+ *      earn-USDC into the deployer's USDC ATA (the deployer IS the earn-USDC
+ *      mint authority), then add_to_basket transfers it into basket_vault. No
+ *      min guard → ALWAYS lands.
+ *
+ *   2. deposit_rewards(rwtReward) — raises the stRWT rate. Source: the deployer's
+ *      EXISTING RWT ATA balance (a pre-minted buffer), NOT a fresh per-tick mint.
+ *      A per-tick mint of `rwtReward` (≈3 base units on the live 15-RWT pool)
+ *      would be a sub-$1 USDC body → `BelowMinMint` → the WHOLE atomic tx (incl.
+ *      the NAV leg) reverts → permanent no-op. Drawing from the buffer avoids
+ *      that entirely. If the buffer can't cover `rwtReward`, this leg is SKIPPED
+ *      (the NAV leg still lands) and a replenish is triggered.
+ *
+ * Replenish (occasional, SEPARATE tx): when the RWT buffer drops below
+ * `floorTicks × rwtReward`, mint a `bufferTicks × rwtReward` chunk via mint_rwt.
+ * The mint body is raised to >= `min_mint_amount` so it ALWAYS clears the
+ * on-chain floor. Done in its own tx so a (shouldn't-happen) failure can't
+ * affect the per-tick legs. Self-sustaining: the deployer mints USDC freely,
+ * mint_rwt converts it to RWT in ≥$1 chunks, the buffer feeds deposit_rewards.
  *
  * Floor / honesty behavior: each reward is floored to an integer base unit. On
- * a tiny pool a per-minute reward can round to 0 — we SKIP that instruction
- * rather than fake a deposit, so the APY the snapshot service derives stays
- * honest (no lumpy fake spikes). At 15 RWT active / 12% APY the per-minute RWT
- * reward is ~3 base units, comfortably above the floor.
+ * a tiny pool a per-minute reward can round to 0 — we SKIP that leg rather than
+ * fake a deposit, so the APY the snapshot service derives stays honest.
+ *
+ * Invariants preserved (enforced by the contracts; we just sequence correctly):
+ *   - mint_rwt mints RWT at NAV and books the USDC body into capital, so Book
+ *     NAV is unchanged by the replenish mint (supply + capital move in lockstep).
+ *   - deposit_rewards moves RWT depositor→pool_vault and bumps total_rwt_active,
+ *     keeping `pool_vault == active + reserved`.
  */
 @Injectable()
 export class EarnKeeperService {
@@ -126,12 +183,14 @@ export class EarnKeeperService {
   private gatesPass(): boolean {
     // Gate 5 — explicit enable flag.
     if (!this.config.get<boolean>('earnKeeper.enabled')) return false;
-    // Gate 1 — cluster.
-    if (this.cluster() !== 'devnet') return false;
-    // Gate 4 — RPC URL.
-    const rpcUrl = this.config.get<string>('solana.rpcUrl') ?? '';
-    if (!/devnet|localhost|127\.0\.0\.1/.test(rpcUrl)) {
-      this.logger.warn('keeper inert: RPC URL does not look like devnet/localhost');
+    // Gate 1 — cluster (fail-closed). Only the explicit 'devnet' cluster is
+    // runtime-active; mainnet/testnet/typo'd → cluster() returns it unchanged
+    // and isDevnetCluster rejects it.
+    if (!isDevnetCluster(this.cluster())) return false;
+    // Gate 4 — host-anchored RPC allowlist (no substring match; a mainnet host
+    // with a `/devnet` path is rejected).
+    if (!isAllowedDevnetRpc(this.config.get<string>('solana.rpcUrl'))) {
+      this.logger.warn('keeper inert: RPC URL host is not on the devnet allowlist');
       return false;
     }
     // Gate 2 — keypair present.
@@ -162,16 +221,20 @@ export class EarnKeeperService {
     const usdcReward =
       (earn.totalInvestedCapital * apyBps) / BPS_DENOMINATOR / BigInt(MINUTES_PER_YEAR);
 
-    const ixs: TransactionInstruction[] = [];
+    const authorityUsdcAta = findAta(authority.publicKey, earn.usdcMint);
+    const depositorRwtAta = findAta(authority.publicKey, staking.rwtMint);
 
-    // ── add_to_basket leg (raises Book NAV) ──────────────────────────────────
-    // Source: MintTo earn-USDC into the deployer's USDC ATA (authority IS the
-    // earn-USDC mint authority), then add_to_basket transfers it into the
-    // basket vault. authority_source = dao_fee_destination (the deployer's
-    // earn-USDC ATA == EarnConfig.dao_fee_destination on devnet).
+    // ── Per-tick legs (one tx; neither can hit min_mint_amount) ───────────────
+    const ixs: TransactionInstruction[] = [];
+    // earn-USDC the deployer must hold this tick = add_to_basket body only (the
+    // deposit_rewards leg draws RWT from the existing buffer, not USDC).
+    let usdcToMint = 0n;
+
+    // add_to_basket leg (raises Book NAV). MintTo the body into the deployer USDC
+    // ATA, then add_to_basket transfers it into basket_vault. No min guard.
+    let didAddToBasket = false;
     if (usdcReward >= MIN_REWARD_BASE_UNITS) {
-      const authorityUsdcAta = findAta(authority.publicKey, earn.usdcMint);
-      ixs.push(buildMintToIx(authority.publicKey, earn.usdcMint, authorityUsdcAta, usdcReward));
+      usdcToMint += usdcReward;
       ixs.push(
         buildAddToBasketIx({
           earnProgramId: this.earnProgramId,
@@ -183,20 +246,22 @@ export class EarnKeeperService {
           amount: usdcReward,
         }),
       );
+      didAddToBasket = true;
     } else {
       this.logger.debug(
         `keeper: usdc reward floored to 0 (capital=${earn.totalInvestedCapital}) — skipping add_to_basket`,
       );
     }
 
-    // ── deposit_rewards leg (raises stRWT rate) ──────────────────────────────
-    // Source: the deployer's pre-funded RWT ATA. The keeper canNOT mint RWT
-    // (EarnConfig PDA holds that authority), so it draws from the treasury and
-    // skips if the balance can't cover the reward.
+    // deposit_rewards leg (raises stRWT rate). Draw rwtReward from the EXISTING
+    // RWT buffer (deployer ATA) — NOT a fresh per-tick mint (that would be a
+    // sub-$1 mint_rwt body → BelowMinMint → reverts the whole tick). If the
+    // buffer can't cover it, skip the leg (NAV leg still lands) and rely on the
+    // replenish below to top the buffer up for the next tick.
+    let didDepositRewards = false;
+    const rwtBalance = await this.tokenBalance(depositorRwtAta);
     if (rwtReward >= MIN_REWARD_BASE_UNITS) {
-      const depositorRwtAta = findAta(authority.publicKey, staking.rwtMint);
-      const haveRwt = await this.tokenBalance(depositorRwtAta);
-      if (haveRwt >= rwtReward) {
+      if (rwtBalance >= rwtReward) {
         ixs.push(
           buildDepositRewardsIx({
             stakingProgramId: this.stakingProgramId,
@@ -208,9 +273,11 @@ export class EarnKeeperService {
             rwtAmount: rwtReward,
           }),
         );
+        didDepositRewards = true;
       } else {
         this.logger.warn(
-          `keeper: RWT reward treasury low (have=${haveRwt} need=${rwtReward} ata=${depositorRwtAta.toBase58()}) — skipping deposit_rewards. Top up the deployer's RWT ATA.`,
+          `keeper: RWT buffer too low (balance=${rwtBalance} < reward=${rwtReward}) — ` +
+            `skipping deposit_rewards this tick; replenish will refill the buffer`,
         );
       }
     } else {
@@ -219,15 +286,108 @@ export class EarnKeeperService {
       );
     }
 
-    if (ixs.length === 0) {
-      this.logger.debug('keeper: nothing to do this tick (all legs below floor/treasury)');
-      return;
+    // Send the per-tick tx (if any leg is present). The MintTo (if needed) funds
+    // the add_to_basket body; deposit_rewards needs no fresh USDC.
+    if (ixs.length > 0) {
+      const fundedIxs: TransactionInstruction[] =
+        usdcToMint > 0n
+          ? [buildMintToIx(authority.publicKey, earn.usdcMint, authorityUsdcAta, usdcToMint), ...ixs]
+          : ixs;
+      await this.sendBatched(authority, fundedIxs);
+      this.logger.log(
+        `keeper tick: usdcReward=${usdcReward} (addToBasket=${didAddToBasket}) ` +
+          `rwtReward=${rwtReward} (depositRewards=${didDepositRewards}, buffer=${rwtBalance}) ` +
+          `usdcMinted=${usdcToMint} ixs=${fundedIxs.length}`,
+      );
+    } else {
+      this.logger.debug('keeper: nothing to do this tick (all legs below floor)');
     }
+
+    // ── Replenish step (SEPARATE tx) ─────────────────────────────────────────
+    // Top the RWT buffer back up if it dropped below the floor. Sized + min-mint
+    // clamped so the mint always clears the on-chain $1 floor. Isolated in its
+    // own tx so a failure here can never roll back the per-tick legs above.
+    if (rwtReward >= MIN_REWARD_BASE_UNITS) {
+      await this.maybeReplenish(authority, earn, staking.rwtMint, depositorRwtAta, rwtReward);
+    }
+  }
+
+  /**
+   * Mint a ≥$1 RWT chunk into the deployer's buffer ATA when the balance has
+   * dropped below `floorTicks × rwtReward`. The chunk targets `bufferTicks ×
+   * rwtReward` RWT; the USDC body is raised to >= `min_mint_amount` so the
+   * mint_rwt can never revert with BelowMinMint. SEPARATE tx (own send).
+   */
+  private async maybeReplenish(
+    authority: Keypair,
+    earn: DecodedEarnConfig,
+    rwtMint: PublicKey,
+    depositorRwtAta: PublicKey,
+    rwtReward: bigint,
+  ): Promise<void> {
+    const bufferTicks = BigInt(this.config.get<number>('earnKeeper.bufferTicks') ?? 1_440);
+    const floorTicks = BigInt(this.config.get<number>('earnKeeper.floorTicks') ?? 60);
+
+    const replenishFloor = rwtReward * floorTicks;
+    const balance = await this.tokenBalance(depositorRwtAta);
+    if (balance >= replenishFloor) return; // buffer still healthy
+
+    // Target buffer top-up (RWT). mint_rwt's USDC body is clamped to the
+    // on-chain floor so even a tiny target still produces a legal ≥$1 mint.
+    const targetBufferRwt = rwtReward * bufferTicks;
+    const rwtSupply = await this.mintSupply(rwtMint);
+    const nav = calculateNav(earn.totalInvestedCapital, rwtSupply);
+    const mintBody = replenishMintBody(targetBufferRwt, nav, earn.minMintAmount);
+    const mintFee = mintRwtFeeCeil(mintBody, BigInt(earn.mintFeeBps));
+    const usdcToMint = mintBody + mintFee;
+
+    const authorityUsdcAta = findAta(authority.publicKey, earn.usdcMint);
+
+    // MintTo body+fee USDC → mint_rwt deposits the body at NAV, mints RWT to the
+    // deployer's buffer ATA. min_rwt_out = 1 (slippage floor; handler rejects 0)
+    // — the chunk is sized so the realised RWT out is far above 1.
+    const ixs: TransactionInstruction[] = [
+      buildMintToIx(authority.publicKey, earn.usdcMint, authorityUsdcAta, usdcToMint),
+      buildMintRwtIx({
+        earnProgramId: this.earnProgramId,
+        user: authority.publicKey,
+        earnConfig: this.earnConfigPda,
+        rwtMint: earn.rwtMint,
+        userUsdc: authorityUsdcAta,
+        userRwt: depositorRwtAta,
+        basketVault: earn.basketVault,
+        daoFeeDestination: earn.daoFeeDestination,
+        usdcAmount: mintBody,
+        minRwtOut: MIN_REWARD_BASE_UNITS,
+      }),
+    ];
 
     await this.sendBatched(authority, ixs);
     this.logger.log(
-      `keeper tick: usdcReward=${usdcReward} rwtReward=${rwtReward} ixs=${ixs.length}`,
+      `keeper replenish: buffer=${balance} < floor=${replenishFloor} → minted ` +
+        `body=${mintBody} fee=${mintFee} (target=${targetBufferRwt} RWT, nav=${nav}, ` +
+        `minMint=${earn.minMintAmount})`,
     );
+  }
+
+  /** Read an SPL mint's current supply; returns 0n if the mint is missing. */
+  private async mintSupply(mint: PublicKey): Promise<bigint> {
+    try {
+      const resp = await this.conn.getTokenSupply(mint, 'confirmed');
+      return BigInt(resp.value.amount);
+    } catch {
+      return 0n;
+    }
+  }
+
+  /** Read an SPL token account's balance; returns 0n if the account is missing. */
+  private async tokenBalance(ata: PublicKey): Promise<bigint> {
+    try {
+      const resp = await this.conn.getTokenAccountBalance(ata, 'confirmed');
+      return BigInt(resp.value.amount);
+    } catch {
+      return 0n;
+    }
   }
 
   /** Build, sign, send + confirm a single batched tx. Throws on failure. */
@@ -245,17 +405,21 @@ export class EarnKeeperService {
     this.logger.log(`keeper tx confirmed: ${signature}`);
   }
 
-  /** Read an SPL token account's amount; returns 0n if the account is missing. */
-  private async tokenBalance(ata: PublicKey): Promise<bigint> {
-    try {
-      const resp = await this.conn.getTokenAccountBalance(ata, 'confirmed');
-      return BigInt(resp.value.amount);
-    } catch {
-      return 0n;
-    }
-  }
-
-  private cluster(): SolanaCluster {
-    return (this.config.get<string>('solana.cluster') ?? 'devnet') as SolanaCluster;
+  /**
+   * Read the configured cluster. NOTE: `configuration.ts` defaults an unset
+   * `SOLANA_CLUSTER` to 'devnet' BEFORE this reads it, so `solana.cluster` is
+   * effectively never undefined here — an unset env resolves to 'devnet', which
+   * is the keeper's OWN cluster (devnet RPC, devnet program pins), not a leak
+   * onto a foreign network. The fail-closed protection that matters is that
+   * ONLY the exact 'devnet' string runs (isDevnetCluster): a mainnet/testnet/
+   * typo'd value flows through unchanged and is rejected. We still return
+   * `undefined` for an explicitly empty/whitespace value as a belt-and-braces
+   * guard, but the real no-mainnet guarantee is the explicit-'devnet' check plus
+   * the host-anchored RPC allowlist (Gate 4), not this defaulting.
+   */
+  private cluster(): SolanaCluster | undefined {
+    const raw = this.config.get<string>('solana.cluster');
+    const trimmed = raw?.trim();
+    return trimmed && trimmed.length > 0 ? (trimmed as SolanaCluster) : undefined;
   }
 }
