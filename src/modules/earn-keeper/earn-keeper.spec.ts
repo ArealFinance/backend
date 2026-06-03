@@ -281,7 +281,7 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
           'earn.programId': undefined,
           'earn.stakingProgramId': undefined,
           'earnKeeper.authorityPubkey': '8ddRxwGnC1MD5ZCf22eLAne77Rput8itQbTjMr93xYvq',
-          'earnKeeper.authorityKeypairB64': wrongKp.secretKey.toString('base64'),
+          'earnKeeper.authorityKeypairB64': Buffer.from(wrongKp.secretKey).toString('base64'),
         };
         return config[key];
       });

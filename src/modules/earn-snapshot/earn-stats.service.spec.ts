@@ -22,9 +22,7 @@ import { RATE_SCALE, NAV_SCALE } from './earn-onchain.js';
 
 describe('EarnStatsService: APY honesty', () => {
   let service: EarnStatsService;
-  let mockSnapshotRepo: {
-    createQueryBuilder: ReturnType<Repository<EarnSnapshot>['createQueryBuilder']>;
-  };
+  let mockSnapshotRepo: any;
 
   beforeEach(async () => {
     // Build a mock repository with chainable query builder
