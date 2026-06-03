@@ -16,6 +16,7 @@ import { DataSource } from 'typeorm';
 
 import { ClaimHistory } from './entities/claim-history.entity.js';
 import { DailyPoolAggregate } from './entities/daily-pool-aggregate.entity.js';
+import { EarnSnapshot } from './entities/earn-snapshot.entity.js';
 import { Event } from './entities/event.entity.js';
 import { LpPositionHistory } from './entities/lp-position-history.entity.js';
 import { PoolSnapshot } from './entities/pool-snapshot.entity.js';
@@ -31,6 +32,7 @@ import { ProjectionTables1715040000000 } from './migrations/0004-projection-tabl
 import { MarketsAggregates1715140000000 } from './migrations/0005-markets-aggregates.js';
 import { PoolSnapshotPrices1715140000001 } from './migrations/0006-pool-snapshot-prices.js';
 import { RenameDistributorCount1715140000002 } from './migrations/0007-rename-distributor-count.js';
+import { EarnSnapshots1715140000003 } from './migrations/0008-earn-snapshots.js';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -51,6 +53,7 @@ export default new DataSource({
     PoolSnapshot,
     DailyPoolAggregate,
     ProtocolSummary,
+    EarnSnapshot,
   ],
   migrations: [
     InitSchema1714780800000,
@@ -60,6 +63,7 @@ export default new DataSource({
     MarketsAggregates1715140000000,
     PoolSnapshotPrices1715140000001,
     RenameDistributorCount1715140000002,
+    EarnSnapshots1715140000003,
   ],
   migrationsTableName: 'typeorm_migrations',
 });

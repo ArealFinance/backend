@@ -142,5 +142,38 @@ export default () => {
       earnUsdcAuthorityPubkey: process.env.FAUCET_EARN_USDC_AUTHORITY,
       earnUsdcMint: process.env.FAUCET_EARN_USDC_MINT,
     },
+
+    // Earn / staking program IDs. Pinned in modules/earn-snapshot/earn-onchain.ts
+    // (the SDK's built dist predates these programs), overridable here so a
+    // redeploy propagates via env. Consumed by both the snapshot service and
+    // the keeper.
+    earn: {
+      programId: process.env.EARN_PROGRAM_ID,
+      stakingProgramId: process.env.STAKING_PROGRAM_ID,
+    },
+
+    // Devnet-ONLY yield keeper. A simulation of the real off-chain income
+    // distributor: a 1-min cron that deposits small rewards on-chain so the
+    // stRWT rate / Book NAV genuinely move on devnet. Inert unless FIVE
+    // fail-closed gates all pass (see modules/earn-keeper/earn-keeper.module.ts);
+    // can NEVER run on mainnet. The signing keypair is the devnet deployer
+    // (= earn authority + staking reward_depositor + earn-USDC mint authority).
+    earnKeeper: {
+      // Master enable flag — default false. Both this AND cluster==devnet are
+      // required for the cron to do anything; either off → no-op.
+      enabled: asBool(process.env.DEVNET_YIELD_KEEPER_ENABLED, false),
+      // Target APY in basis points (1200 = 12%/yr). Drives the per-minute
+      // reward sizing for both deposit_rewards and add_to_basket.
+      apyBps: asInt(process.env.DEVNET_YIELD_KEEPER_APY_BPS, 1200),
+      // base64 of the deployer keypair that signs keeper instructions. Reuses
+      // the SAME deployer the faucet loads (8ddRxwGn…); falls back to the
+      // faucet's RWT-treasury keypair env if the dedicated one is unset, so a
+      // single deployer secret in the env serves both paths.
+      authorityKeypairB64:
+        process.env.DEVNET_YIELD_KEEPER_KEYPAIR_B64 ?? process.env.FAUCET_RWT_TREASURY_KEYPAIR_B64,
+      // Expected signer pubkey — boot-time safety pin. Falls back to the
+      // faucet's RWT-treasury pubkey env, then the pinned deployer constant.
+      authorityPubkey: process.env.DEVNET_YIELD_KEEPER_AUTHORITY ?? process.env.FAUCET_RWT_TREASURY,
+    },
   };
 };

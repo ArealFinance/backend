@@ -10,6 +10,7 @@ import { SolanaConnectionModule } from './common/solana/connection.module.js';
 import configuration from './config/configuration.js';
 import { ClaimHistory } from './entities/claim-history.entity.js';
 import { DailyPoolAggregate } from './entities/daily-pool-aggregate.entity.js';
+import { EarnSnapshot } from './entities/earn-snapshot.entity.js';
 import { Event } from './entities/event.entity.js';
 import { LpPositionHistory } from './entities/lp-position-history.entity.js';
 import { PoolSnapshot } from './entities/pool-snapshot.entity.js';
@@ -19,6 +20,8 @@ import { RevenueDistribution } from './entities/revenue-distribution.entity.js';
 import { Transaction } from './entities/transaction.entity.js';
 import { User } from './entities/user.entity.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { EarnKeeperModule } from './modules/earn-keeper/earn-keeper.module.js';
+import { EarnSnapshotModule } from './modules/earn-snapshot/earn-snapshot.module.js';
 import { FaucetModule } from './modules/faucet/faucet.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { IndexerModule } from './modules/indexer/indexer.module.js';
@@ -76,6 +79,7 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
             PoolSnapshot,
             DailyPoolAggregate,
             ProtocolSummary,
+            EarnSnapshot,
           ],
           migrations: [],
           ssl: wantsSsl ? { rejectUnauthorized: false } : false,
@@ -108,6 +112,11 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
     PortfolioModule,
     RealtimeModule,
     MarketsModule,
+    EarnSnapshotModule,
+    // Devnet-ONLY yield keeper — registered always so the cron exists, but
+    // inert unless its five fail-closed gates pass (see EarnKeeperModule). Can
+    // NEVER act on mainnet.
+    EarnKeeperModule,
   ],
   providers: [
     // Apply ThrottlerGuard globally so every controller route gets rate-limited
