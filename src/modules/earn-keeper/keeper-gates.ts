@@ -24,6 +24,15 @@ import type { SolanaCluster } from '../../config/configuration.js';
  */
 const ALLOWED_RPC_HOSTS = new Set<string>([
   'api.devnet.solana.com',
+  // Helius devnet APEX host. The live beget devnet RPC is
+  // `https://devnet.helius-rpc.com/?api-key=…`, whose hostname is the apex
+  // `devnet.helius-rpc.com` — it has NO subdomain label, so it does NOT match
+  // the `.devnet.helius-rpc.com` suffix below (that needs a leading label like
+  // `my-key.devnet.helius-rpc.com`). It must be allowlisted explicitly. This is
+  // still tight: `mainnet.helius-rpc.com`, `rpc.helius.xyz`, and
+  // `devnet.helius-rpc.com.attacker.tld` are all distinct hostnames and remain
+  // rejected.
+  'devnet.helius-rpc.com',
   'localhost',
   '127.0.0.1',
   '::1',
@@ -33,7 +42,8 @@ const ALLOWED_RPC_HOSTS = new Set<string>([
  * Hostname SUFFIXES that are allowed (matched as `.suffix`, so the boundary is a
  * real DNS label — `evil-devnet.helius-rpc.com` matches, but
  * `devnet.helius-rpc.com.attacker.tld` does NOT because the suffix is anchored
- * to the end of the hostname).
+ * to the end of the hostname). The apex `devnet.helius-rpc.com` is covered by
+ * the exact-host allowlist above (a suffix needs a leading label).
  */
 const ALLOWED_RPC_HOST_SUFFIXES = ['.devnet.helius-rpc.com'] as const;
 

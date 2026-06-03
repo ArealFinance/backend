@@ -21,13 +21,19 @@ import { EARN_CONFIG_PDA, STAKING_CONFIG_PDA } from '../earn-snapshot/earn-oncha
  * The keeper is gated by FIVE independent fail-closed checks:
  *   Gate 1: buildKeeperAuthorityKeypair returns null unless cluster is devnet/localnet.
  *   Gate 2: Keypair provider returns null off devnet/localnet.
- *   Gate 3: assertDevnetPins throws on program ID or PDA mismatch (boot-time).
+ *   Gate 3: assertDevnetPins reports { ok: false } on program ID or PDA mismatch (boot-time).
  *   Gate 4: RPC URL check at boot + runtime.
  *   Gate 5: Explicit DEVNET_YIELD_KEEPER_ENABLED flag at runtime.
  *
+ * INERT-NOT-FATAL: a boot gate failure must DISABLE the keeper (return null /
+ * report { ok: false }), NEVER throw out of the provider — a throw during Nest
+ * bootstrap crashes the whole backend (faucet/snapshot/`/earn/stats` all die).
+ * These tests pin that every boot-gate failure path is inert, not fatal.
+ *
  * These tests verify:
  *   - NO combination of gates can yield a signing action on mainnet.
- *   - Devnet-specific pins are enforced at boot.
+ *   - Devnet-specific pins are reported (not thrown) at boot.
+ *   - A bad RPC / cluster / pin / keypair makes the keeper inert WITHOUT throwing.
  *   - Per-tick reward math floors correctly and respects the MIN_REWARD_BASE_UNITS floor.
  */
 
@@ -118,7 +124,7 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
       });
     });
 
-    it('throws when earn program ID does not match expected devnet pin', () => {
+    it('reports { ok: false } (no throw) when earn program ID does not match expected devnet pin', () => {
       const wrongProgramId = Keypair.generate().publicKey.toBase58();
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
@@ -130,12 +136,16 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).toThrow(
-        /earn program ID mismatch/i,
-      );
+      // INERT-NOT-FATAL: returns a result, never throws.
+      let result!: ReturnType<typeof assertDevnetPins>;
+      expect(() => {
+        result = assertDevnetPins(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/earn program ID mismatch/i);
     });
 
-    it('throws when staking program ID does not match expected devnet pin', () => {
+    it('reports { ok: false } (no throw) when staking program ID does not match expected devnet pin', () => {
       const wrongProgramId = Keypair.generate().publicKey.toBase58();
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
@@ -147,12 +157,15 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).toThrow(
-        /staking program ID mismatch/i,
-      );
+      let result!: ReturnType<typeof assertDevnetPins>;
+      expect(() => {
+        result = assertDevnetPins(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/staking program ID mismatch/i);
     });
 
-    it('throws when EarnConfig PDA derived from program ID does not match pinned literal', () => {
+    it('reports { ok: false } when EarnConfig PDA derived from program ID does not match pinned literal', () => {
       // The pinned EARN_CONFIG_PDA is derived from the known earn program ID
       // If we swap to a different program ID, the PDA won't match even if the ID itself is "valid"
       const differentProgram = Keypair.generate().publicKey.toBase58();
@@ -166,13 +179,13 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      // This will fail on program ID first, but we're verifying the PDA check exists
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).toThrow(
-        /program ID mismatch|PDA mismatch/i,
-      );
+      // This will fail on program ID first, but we're verifying the gate reports a failure.
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/program ID mismatch|PDA mismatch/i);
     });
 
-    it('throws when mint constants are malformed (typo in base58)', () => {
+    it('reports { ok: true } when mint constants are valid (no throw)', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -185,8 +198,9 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
 
       // We can't mock the mint parsing at the module level without a deeper integration test,
       // but the gate is exercised: it reads EARN_RWT_MINT / STRWT_MINT and validates them.
-      // For now, verify the function runs without throwing (mints are valid in source).
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).not.toThrow();
+      // For now, verify the function reports ok (mints are valid in source).
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(true);
     });
   });
 
@@ -203,7 +217,7 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
       });
     });
 
-    it('throws when cluster is devnet but RPC URL does not match devnet/localhost pattern', () => {
+    it('reports { ok: false } (no throw) when cluster is devnet but RPC URL is the wrong network', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -214,12 +228,15 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).toThrow(
-        /RPC URL host is not on the devnet allowlist/i,
-      );
+      let result!: ReturnType<typeof assertDevnetPins>;
+      expect(() => {
+        result = assertDevnetPins(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/RPC URL host is not on the devnet allowlist/i);
     });
 
-    it('REJECTS a coincidental-substring RPC URL (mainnet host, /devnet path)', () => {
+    it('REJECTS a coincidental-substring RPC URL (mainnet host, /devnet path) — { ok: false }', () => {
       // The old substring check accepted any url merely CONTAINING "devnet".
       // The host-anchored allowlist must reject a mainnet host with a devnet path.
       (mockConfig.get as any).mockImplementation((key: string) => {
@@ -232,12 +249,12 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).toThrow(
-        /RPC URL host is not on the devnet allowlist/i,
-      );
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/RPC URL host is not on the devnet allowlist/i);
     });
 
-    it('REJECTS a host that merely embeds "localhost" as a substring', () => {
+    it('REJECTS a host that merely embeds "localhost" as a substring — { ok: false }', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -248,12 +265,27 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).toThrow(
-        /RPC URL host is not on the devnet allowlist/i,
-      );
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/RPC URL host is not on the devnet allowlist/i);
     });
 
-    it('passes when devnet cluster + helius devnet suffix RPC URL', () => {
+    it('reports { ok: true } when devnet cluster + helius devnet APEX RPC URL (the live beget host)', () => {
+      // The live beget devnet RPC is the APEX host (no subdomain label).
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'devnet',
+          'solana.rpcUrl': 'https://devnet.helius-rpc.com/?api-key=secret',
+          'earn.programId': undefined,
+          'earn.stakingProgramId': undefined,
+        };
+        return config[key];
+      });
+
+      expect(assertDevnetPins(mockConfig as ConfigService).ok).toBe(true);
+    });
+
+    it('reports { ok: true } when devnet cluster + helius devnet suffix RPC URL', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -264,10 +296,10 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).not.toThrow();
+      expect(assertDevnetPins(mockConfig as ConfigService).ok).toBe(true);
     });
 
-    it('passes when devnet cluster + devnet RPC URL', () => {
+    it('reports { ok: true } when devnet cluster + devnet RPC URL', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -278,10 +310,10 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).not.toThrow();
+      expect(assertDevnetPins(mockConfig as ConfigService).ok).toBe(true);
     });
 
-    it('passes when devnet cluster + localhost RPC URL', () => {
+    it('reports { ok: true } when devnet cluster + localhost RPC URL', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -292,10 +324,10 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).not.toThrow();
+      expect(assertDevnetPins(mockConfig as ConfigService).ok).toBe(true);
     });
 
-    it('passes when devnet cluster + 127.0.0.1 RPC URL', () => {
+    it('reports { ok: true } when devnet cluster + 127.0.0.1 RPC URL', () => {
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
           'solana.cluster': 'devnet',
@@ -306,27 +338,13 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
         return config[key];
       });
 
-      expect(() => assertDevnetPins(mockConfig as ConfigService)).not.toThrow();
+      expect(assertDevnetPins(mockConfig as ConfigService).ok).toBe(true);
     });
   });
 
-  describe('Gate 1+2 signer pubkey validation', () => {
-    beforeEach(() => {
-      // Setup a valid devnet config that will pass Gate 3 + 4
-      (mockConfig.get as any).mockImplementation((key: string) => {
-        const config: Record<string, any> = {
-          'solana.cluster': 'devnet',
-          'solana.rpcUrl': 'https://api.devnet.solana.com',
-          'earn.programId': undefined,
-          'earn.stakingProgramId': undefined,
-          'earnKeeper.authorityPubkey': '8ddRxwGnC1MD5ZCf22eLAne77Rput8itQbTjMr93xYvq',
-          'earnKeeper.authorityKeypairB64': undefined,
-        };
-        return config[key];
-      });
-    });
-
-    it('throws when signer pubkey does not match expected deployer', () => {
+  describe('Gate 1+2 signer pubkey validation (INERT-NOT-FATAL)', () => {
+    it('returns null (inert), does NOT throw, when signer pubkey does not match expected deployer', () => {
+      // A freshly generated keypair will not match the expected deployer pubkey.
       const wrongKp = Keypair.generate();
       (mockConfig.get as any).mockImplementation((key: string) => {
         const config: Record<string, any> = {
@@ -335,19 +353,78 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
           'earn.programId': undefined,
           'earn.stakingProgramId': undefined,
           'earnKeeper.authorityPubkey': '8ddRxwGnC1MD5ZCf22eLAne77Rput8itQbTjMr93xYvq',
+          // Valid 64-byte secret key (base64) → loads fine, but is the WRONG pubkey.
           'earnKeeper.authorityKeypairB64': Buffer.from(wrongKp.secretKey).toString('base64'),
         };
         return config[key];
       });
 
-      // Mock loadKeypairFromB64Env to return the wrong keypair
-      const mockLoadKeypair = vi.fn().mockReturnValue(wrongKp);
-      vi.doMock('../faucet/spl/keypair-loader.js', () => ({
-        loadKeypairFromB64Env: mockLoadKeypair,
-      }));
+      let result: Keypair | null | undefined;
+      expect(() => {
+        result = buildKeeperAuthorityKeypair(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result).toBeNull();
+    });
 
-      // Note: This test is limited without full module setup.
-      // In practice, this is caught by the module's factory provider.
+    it('returns null (inert), does NOT throw, when the keypair env var is missing/malformed', () => {
+      // cluster devnet + valid RPC/pins, but no keypair env → loadKeypairFromB64Env
+      // would throw; the provider must catch it and go inert instead of crashing.
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'devnet',
+          'solana.rpcUrl': 'https://api.devnet.solana.com',
+          'earn.programId': undefined,
+          'earn.stakingProgramId': undefined,
+          'earnKeeper.authorityKeypairB64': undefined, // missing
+        };
+        return config[key];
+      });
+
+      let result: Keypair | null | undefined;
+      expect(() => {
+        result = buildKeeperAuthorityKeypair(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result).toBeNull();
+    });
+
+    it('returns null (inert), does NOT throw, when cluster is devnet but RPC is not allowlisted', () => {
+      // Gate 4 boot-half fails. Previously this THREW and crash-looped the whole
+      // backend; now it must disable ONLY the keeper.
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'devnet',
+          'solana.rpcUrl': 'https://api.mainnet-beta.solana.com', // not allowlisted
+          'earn.programId': undefined,
+          'earn.stakingProgramId': undefined,
+        };
+        return config[key];
+      });
+
+      let result: Keypair | null | undefined;
+      expect(() => {
+        result = buildKeeperAuthorityKeypair(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result).toBeNull();
+    });
+
+    it('returns null (inert), does NOT throw, when a program pin mismatches on devnet', () => {
+      // Gate 3 fails (wrong earn program ID). Must be inert, not fatal.
+      const wrongProgramId = Keypair.generate().publicKey.toBase58();
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'devnet',
+          'solana.rpcUrl': 'https://api.devnet.solana.com',
+          'earn.programId': wrongProgramId,
+          'earn.stakingProgramId': undefined,
+        };
+        return config[key];
+      });
+
+      let result: Keypair | null | undefined;
+      expect(() => {
+        result = buildKeeperAuthorityKeypair(mockConfig as ConfigService);
+      }).not.toThrow();
+      expect(result).toBeNull();
     });
   });
 
@@ -390,6 +467,31 @@ describe('keeper-gates: isAllowedDevnetRpc (host-anchored, Gate 4)', () => {
 
   it('accepts a *.devnet.helius-rpc.com suffix host', () => {
     expect(isAllowedDevnetRpc('https://abc-key.devnet.helius-rpc.com')).toBe(true);
+  });
+
+  it('accepts the APEX devnet.helius-rpc.com host (the live beget devnet RPC)', () => {
+    // Apex host has NO subdomain label, so it is NOT matched by the
+    // `.devnet.helius-rpc.com` suffix — it must be on the exact-host allowlist.
+    expect(isAllowedDevnetRpc('https://devnet.helius-rpc.com')).toBe(true);
+    expect(isAllowedDevnetRpc('https://devnet.helius-rpc.com/?api-key=secret')).toBe(true);
+  });
+
+  it('REJECTS the helius MAINNET apex host', () => {
+    expect(isAllowedDevnetRpc('https://mainnet.helius-rpc.com')).toBe(false);
+    expect(isAllowedDevnetRpc('https://mainnet.helius-rpc.com/?api-key=secret')).toBe(false);
+  });
+
+  it('REJECTS the bare helius rpc.helius.xyz host', () => {
+    expect(isAllowedDevnetRpc('https://rpc.helius.xyz')).toBe(false);
+  });
+
+  it('REJECTS the apex devnet host with an appended attacker label', () => {
+    // devnet.helius-rpc.com.attacker.tld is a DISTINCT hostname → rejected.
+    expect(isAllowedDevnetRpc('https://devnet.helius-rpc.com.attacker.tld')).toBe(false);
+  });
+
+  it('REJECTS evil.com', () => {
+    expect(isAllowedDevnetRpc('https://evil.com')).toBe(false);
   });
 
   it('REJECTS a mainnet host with a coincidental /devnet path', () => {
