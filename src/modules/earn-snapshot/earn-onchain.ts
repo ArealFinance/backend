@@ -14,7 +14,7 @@
  * Layout verification (offsets are relative to the start of `account.data`,
  * i.e. INCLUDING the 8-byte Arlex discriminator):
  *
- *   EarnConfig (contracts/earn/src/state.rs, repr(C,packed), SIZE=220, SPACE=228)
+ *   EarnConfig (contracts/earn/src/state.rs, repr(C,packed), SIZE=349, SPACE=357)
  *     8   total_invested_capital : u128 (16 bytes, LE)   <- Book NAV numerator
  *     24  authority              : [u8;32]
  *     56  pending_authority      : [u8;32]
@@ -26,8 +26,10 @@
  *     187 usdc_mint              : [u8;32]   <- earn USDC mint
  *     219 min_mint_amount        : u64 (8)
  *     227 bump                   : u8 (1)
+ *     228 schema_version         : u8 (1)    <- forward-compat layout version (=1)
+ *     229 _reserved              : [u8;128]  <- reserved padding (zeroed; new fields carve from front)
  *
- *   StakingConfig (contracts/staking/src/state.rs, repr(C,packed), SIZE=226, SPACE=234)
+ *   StakingConfig (contracts/staking/src/state.rs, repr(C,packed), SIZE=355, SPACE=363)
  *     8   authority         : [u8;32]
  *     40  pending_authority : [u8;32]
  *     72  has_pending       : bool (1)
@@ -40,6 +42,13 @@
  *     217 cooldown_seconds  : i64 (8)
  *     225 min_stake_amount  : u64 (8)
  *     233 bump              : u8 (1)
+ *     234 schema_version    : u8 (1)    <- forward-compat layout version (=1)
+ *     235 _reserved         : [u8;128]  <- reserved padding (zeroed; new fields carve from front)
+ *
+ * The schema_version + _reserved tail was APPENDED after `bump` (forward-compat,
+ * contracts state.rs). Every PRE-EXISTING field offset above is UNCHANGED; only
+ * the total SPACE grew (228->357 earn, 234->363 staking). The exact-length guards
+ * below therefore still reject stale pre-append accounts.
  *
  * This layout is breaking relative to the paused devnet layout. The decoders
  * require exact account sizes so stale pre-removal accounts fail loudly instead
@@ -138,8 +147,8 @@ const STAKING_OFF = {
 
 const EARN_DISCRIMINATOR = Buffer.from([0x8f, 0x6e, 0x3f, 0xb5, 0x95, 0x8c, 0xbe, 0x90]);
 const STAKING_DISCRIMINATOR = Buffer.from([0x2d, 0x86, 0xfc, 0x52, 0x25, 0x39, 0x54, 0x19]);
-const EARN_CONFIG_SPACE = 228;
-const STAKING_CONFIG_SPACE = 234;
+const EARN_CONFIG_SPACE = 357;
+const STAKING_CONFIG_SPACE = 363;
 
 function readU128LE(buf: Buffer, off: number): bigint {
   let v = 0n;

@@ -163,7 +163,7 @@ describe('earn-onchain: decoders', () => {
   describe('decodeEarnConfig', () => {
     it('reads totalInvestedCapital from offset 8 as u128 LE', () => {
       // Build a buffer with correct discriminator + capital at offset 8
-      const buf = Buffer.alloc(228);
+      const buf = Buffer.alloc(357);
       // Write discriminator at 0–7
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
       // Write u128 LE at offset 8: 1_057_000_000
@@ -176,7 +176,7 @@ describe('earn-onchain: decoders', () => {
     });
 
     it('reads pubkey fields (32 bytes each) from their offsets', () => {
-      const buf = Buffer.alloc(228);
+      const buf = Buffer.alloc(357);
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
 
       // Write dummy keypairs at the expected offsets.
@@ -198,7 +198,7 @@ describe('earn-onchain: decoders', () => {
     });
 
     it('reads minMintAmount from offset 219 as u64 LE', () => {
-      const buf = Buffer.alloc(228);
+      const buf = Buffer.alloc(357);
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
       buf.writeBigUInt64LE(1_000_000n, 219); // $1.00 anti-dust floor
       const result = decodeEarnConfig(buf);
@@ -206,13 +206,13 @@ describe('earn-onchain: decoders', () => {
     });
 
     it('throws when buffer length does not match the current layout', () => {
-      const buf = Buffer.alloc(227); // 1 byte short
+      const buf = Buffer.alloc(356); // 1 byte short
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
       expect(() => decodeEarnConfig(buf)).toThrow(/length mismatch/i);
     });
 
     it('throws when discriminator does not match', () => {
-      const buf = Buffer.alloc(228);
+      const buf = Buffer.alloc(357);
       // Write wrong discriminator
       buf.write('0000000000000000', 0, 'hex');
       expect(() => decodeEarnConfig(buf)).toThrow(/discriminator mismatch/i);
@@ -220,7 +220,7 @@ describe('earn-onchain: decoders', () => {
 
     it('rejects a staking config data with earn discriminator (wrong account guard)', () => {
       // This tests the discriminator-assert's role in preventing decoding the wrong account
-      const buf = Buffer.alloc(228);
+      const buf = Buffer.alloc(357);
       buf.write('2d86fc5225395419', 0, 'hex'); // STAKING_DISCRIMINATOR instead of EARN
       expect(() => decodeEarnConfig(buf)).toThrow(/discriminator mismatch/i);
     });
@@ -228,7 +228,7 @@ describe('earn-onchain: decoders', () => {
 
   describe('decodeStakingConfig', () => {
     it('reads staking config fields from the documented offsets', () => {
-      const buf = Buffer.alloc(234);
+      const buf = Buffer.alloc(363);
       // Write discriminator
       buf.write('2d86fc5225395419', 0, 'hex');
 
@@ -258,20 +258,20 @@ describe('earn-onchain: decoders', () => {
     });
 
     it('throws when buffer length does not match the current layout', () => {
-      const buf = Buffer.alloc(233); // 1 byte short
+      const buf = Buffer.alloc(362); // 1 byte short
       buf.write('2d86fc5225395419', 0, 'hex');
       expect(() => decodeStakingConfig(buf)).toThrow(/length mismatch/i);
     });
 
     it('throws on discriminator mismatch', () => {
-      const buf = Buffer.alloc(234);
+      const buf = Buffer.alloc(363);
       buf.write('8f6e3fb5958cbe90', 0, 'hex'); // EARN_DISCRIMINATOR instead of STAKING
       expect(() => decodeStakingConfig(buf)).toThrow(/discriminator mismatch/i);
     });
 
     it('rejects earn config data (stale-PDA protection)', () => {
       // If a stale PDA from an old program is passed, the discriminator guard stops it
-      const buf = Buffer.alloc(234);
+      const buf = Buffer.alloc(363);
       buf.write('8f6e3fb5958cbe90', 0, 'hex'); // EARN_DISCRIMINATOR
       expect(() => decodeStakingConfig(buf)).toThrow(/discriminator mismatch/i);
     });

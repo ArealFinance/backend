@@ -846,7 +846,7 @@ describe('earn-keeper: per-tick + replenish flow (BLOCKER regression)', () => {
 
   /** Build a valid EarnConfig account buffer (offsets per earn-onchain.ts). */
   function buildEarnConfigData(capital: bigint): Buffer {
-    const buf = Buffer.alloc(228);
+    const buf = Buffer.alloc(357);
     buf.write('8f6e3fb5958cbe90', 0, 'hex'); // EARN discriminator
     for (let i = 0; i < 16; i++) buf[8 + i] = Number((capital >> (8n * BigInt(i))) & 0xffn);
     buf.writeUInt16LE(100, 89); // mint_fee_bps = 1%
@@ -860,7 +860,7 @@ describe('earn-keeper: per-tick + replenish flow (BLOCKER regression)', () => {
 
   /** Build a valid StakingConfig account buffer (offsets per earn-onchain.ts). */
   function buildStakingConfigData(active: bigint): Buffer {
-    const buf = Buffer.alloc(234);
+    const buf = Buffer.alloc(363);
     buf.write('2d86fc5225395419', 0, 'hex'); // STAKING discriminator
     Keypair.generate().publicKey.toBuffer().copy(buf, 73); // rwt_mint
     Keypair.generate().publicKey.toBuffer().copy(buf, 105); // strwt_mint
