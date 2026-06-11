@@ -40,8 +40,7 @@ describe('earn-onchain: math', () => {
     });
 
     it('computes nav = capital × NAV_SCALE / supply correctly', () => {
-      // capital=1_057_000_000, supply=15_000_000 → NAV = 1_000_000 (i.e. $1.00)
-      // per live devnet 2026-06-03 state per the comment
+      // capital=1_057_000_000, supply=15_000_000 -> NAV = 70_466_666.
       const result = calculateNav(1_057_000_000n, 15_000_000n);
       // 1_057_000_000 * 1_000_000 / 15_000_000 = 70_466_666.666... → floor to 70_466_666
       expect(result).toBe(70_466_666n);
@@ -164,7 +163,7 @@ describe('earn-onchain: decoders', () => {
   describe('decodeEarnConfig', () => {
     it('reads totalInvestedCapital from offset 8 as u128 LE', () => {
       // Build a buffer with correct discriminator + capital at offset 8
-      const buf = Buffer.alloc(325);
+      const buf = Buffer.alloc(228);
       // Write discriminator at 0–7
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
       // Write u128 LE at offset 8: 1_057_000_000
@@ -177,19 +176,19 @@ describe('earn-onchain: decoders', () => {
     });
 
     it('reads pubkey fields (32 bytes each) from their offsets', () => {
-      const buf = Buffer.alloc(325);
+      const buf = Buffer.alloc(228);
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
 
-      // Write dummy keypairs at the expected offsets (post-guardian-slots shift)
+      // Write dummy keypairs at the expected offsets.
       const basketVaultKp = Keypair.generate();
       const daoFeeKp = Keypair.generate();
       const rwtMintKp = Keypair.generate();
       const usdcMintKp = Keypair.generate();
 
-      basketVaultKp.publicKey.toBuffer().copy(buf, 188);
-      daoFeeKp.publicKey.toBuffer().copy(buf, 220);
-      rwtMintKp.publicKey.toBuffer().copy(buf, 252);
-      usdcMintKp.publicKey.toBuffer().copy(buf, 284);
+      basketVaultKp.publicKey.toBuffer().copy(buf, 91);
+      daoFeeKp.publicKey.toBuffer().copy(buf, 123);
+      rwtMintKp.publicKey.toBuffer().copy(buf, 155);
+      usdcMintKp.publicKey.toBuffer().copy(buf, 187);
 
       const result = decodeEarnConfig(buf);
       expect(result.basketVault.equals(basketVaultKp.publicKey)).toBe(true);
@@ -198,39 +197,22 @@ describe('earn-onchain: decoders', () => {
       expect(result.usdcMint.equals(usdcMintKp.publicKey)).toBe(true);
     });
 
-    it('reads minMintAmount from offset 316 as u64 LE', () => {
-      const buf = Buffer.alloc(325);
+    it('reads minMintAmount from offset 219 as u64 LE', () => {
+      const buf = Buffer.alloc(228);
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
-      buf.writeBigUInt64LE(1_000_000n, 316); // $1.00 anti-dust floor
+      buf.writeBigUInt64LE(1_000_000n, 219); // $1.00 anti-dust floor
       const result = decodeEarnConfig(buf);
       expect(result.minMintAmount).toBe(1_000_000n);
     });
 
-    it('reads pause_authorities ([[u8;32];3] at offset 89), filtering zeroed slots', () => {
-      const buf = Buffer.alloc(325);
+    it('throws when buffer length does not match the current layout', () => {
+      const buf = Buffer.alloc(227); // 1 byte short
       buf.write('8f6e3fb5958cbe90', 0, 'hex');
-
-      // Two active guardians in slots 1 & 2; slot 3 left zeroed (= unused).
-      const guardian1 = Keypair.generate();
-      const guardian2 = Keypair.generate();
-      guardian1.publicKey.toBuffer().copy(buf, 89);
-      guardian2.publicKey.toBuffer().copy(buf, 89 + 32);
-
-      const result = decodeEarnConfig(buf);
-      expect(result.pauseAuthorities).toEqual([
-        guardian1.publicKey.toBase58(),
-        guardian2.publicKey.toBase58(),
-      ]);
-    });
-
-    it('throws when buffer is too short', () => {
-      const buf = Buffer.alloc(324); // 1 byte short
-      buf.write('8f6e3fb5958cbe90', 0, 'hex');
-      expect(() => decodeEarnConfig(buf)).toThrow(/too short/i);
+      expect(() => decodeEarnConfig(buf)).toThrow(/length mismatch/i);
     });
 
     it('throws when discriminator does not match', () => {
-      const buf = Buffer.alloc(325);
+      const buf = Buffer.alloc(228);
       // Write wrong discriminator
       buf.write('0000000000000000', 0, 'hex');
       expect(() => decodeEarnConfig(buf)).toThrow(/discriminator mismatch/i);
@@ -238,7 +220,7 @@ describe('earn-onchain: decoders', () => {
 
     it('rejects a staking config data with earn discriminator (wrong account guard)', () => {
       // This tests the discriminator-assert's role in preventing decoding the wrong account
-      const buf = Buffer.alloc(325);
+      const buf = Buffer.alloc(228);
       buf.write('2d86fc5225395419', 0, 'hex'); // STAKING_DISCRIMINATOR instead of EARN
       expect(() => decodeEarnConfig(buf)).toThrow(/discriminator mismatch/i);
     });
@@ -246,7 +228,7 @@ describe('earn-onchain: decoders', () => {
 
   describe('decodeStakingConfig', () => {
     it('reads staking config fields from the documented offsets', () => {
-      const buf = Buffer.alloc(331);
+      const buf = Buffer.alloc(234);
       // Write discriminator
       buf.write('2d86fc5225395419', 0, 'hex');
 
@@ -255,16 +237,16 @@ describe('earn-onchain: decoders', () => {
       const rewardDepositorKp = Keypair.generate();
       const poolVaultKp = Keypair.generate();
 
-      rwtMintKp.publicKey.toBuffer().copy(buf, 170);
-      strwtMintKp.publicKey.toBuffer().copy(buf, 202);
-      rewardDepositorKp.publicKey.toBuffer().copy(buf, 234);
-      poolVaultKp.publicKey.toBuffer().copy(buf, 266);
+      rwtMintKp.publicKey.toBuffer().copy(buf, 73);
+      strwtMintKp.publicKey.toBuffer().copy(buf, 105);
+      rewardDepositorKp.publicKey.toBuffer().copy(buf, 137);
+      poolVaultKp.publicKey.toBuffer().copy(buf, 169);
 
-      // Write u64 LE values at offsets 298 and 306
+      // Write u64 LE values at offsets 201 and 209.
       const active = 15_000_000n;
       const reserved = 1_000_000n;
-      buf.writeBigUInt64LE(active, 298);
-      buf.writeBigUInt64LE(reserved, 306);
+      buf.writeBigUInt64LE(active, 201);
+      buf.writeBigUInt64LE(reserved, 209);
 
       const result = decodeStakingConfig(buf);
       expect(result.rwtMint.equals(rwtMintKp.publicKey)).toBe(true);
@@ -275,33 +257,21 @@ describe('earn-onchain: decoders', () => {
       expect(result.totalRwtReserved).toBe(reserved);
     });
 
-    it('reads pause_authorities ([[u8;32];3] at offset 73), filtering zeroed slots', () => {
-      const buf = Buffer.alloc(331);
+    it('throws when buffer length does not match the current layout', () => {
+      const buf = Buffer.alloc(233); // 1 byte short
       buf.write('2d86fc5225395419', 0, 'hex');
-
-      // Single active guardian in slot 1; slots 2 & 3 left zeroed (= unused).
-      const guardian1 = Keypair.generate();
-      guardian1.publicKey.toBuffer().copy(buf, 73);
-
-      const result = decodeStakingConfig(buf);
-      expect(result.pauseAuthorities).toEqual([guardian1.publicKey.toBase58()]);
-    });
-
-    it('throws when buffer is too short', () => {
-      const buf = Buffer.alloc(330); // 1 byte short
-      buf.write('2d86fc5225395419', 0, 'hex');
-      expect(() => decodeStakingConfig(buf)).toThrow(/too short/i);
+      expect(() => decodeStakingConfig(buf)).toThrow(/length mismatch/i);
     });
 
     it('throws on discriminator mismatch', () => {
-      const buf = Buffer.alloc(331);
+      const buf = Buffer.alloc(234);
       buf.write('8f6e3fb5958cbe90', 0, 'hex'); // EARN_DISCRIMINATOR instead of STAKING
       expect(() => decodeStakingConfig(buf)).toThrow(/discriminator mismatch/i);
     });
 
     it('rejects earn config data (stale-PDA protection)', () => {
       // If a stale PDA from an old program is passed, the discriminator guard stops it
-      const buf = Buffer.alloc(331);
+      const buf = Buffer.alloc(234);
       buf.write('8f6e3fb5958cbe90', 0, 'hex'); // EARN_DISCRIMINATOR
       expect(() => decodeStakingConfig(buf)).toThrow(/discriminator mismatch/i);
     });

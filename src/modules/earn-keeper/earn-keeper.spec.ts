@@ -846,30 +846,28 @@ describe('earn-keeper: per-tick + replenish flow (BLOCKER regression)', () => {
 
   /** Build a valid EarnConfig account buffer (offsets per earn-onchain.ts). */
   function buildEarnConfigData(capital: bigint): Buffer {
-    const buf = Buffer.alloc(325);
+    const buf = Buffer.alloc(228);
     buf.write('8f6e3fb5958cbe90', 0, 'hex'); // EARN discriminator
     for (let i = 0; i < 16; i++) buf[8 + i] = Number((capital >> (8n * BigInt(i))) & 0xffn);
-    Keypair.generate().publicKey.toBuffer().copy(buf, 89); // pause_authorities[0]
-    buf.writeUInt16LE(100, 186); // mint_fee_bps = 1%
-    Keypair.generate().publicKey.toBuffer().copy(buf, 188); // basket_vault
-    Keypair.generate().publicKey.toBuffer().copy(buf, 220); // dao_fee_destination
-    Keypair.generate().publicKey.toBuffer().copy(buf, 252); // rwt_mint
-    Keypair.generate().publicKey.toBuffer().copy(buf, 284); // usdc_mint
-    buf.writeBigUInt64LE(1_000_000n, 316); // min_mint_amount = $1.00
+    buf.writeUInt16LE(100, 89); // mint_fee_bps = 1%
+    Keypair.generate().publicKey.toBuffer().copy(buf, 91); // basket_vault
+    Keypair.generate().publicKey.toBuffer().copy(buf, 123); // dao_fee_destination
+    Keypair.generate().publicKey.toBuffer().copy(buf, 155); // rwt_mint
+    Keypair.generate().publicKey.toBuffer().copy(buf, 187); // usdc_mint
+    buf.writeBigUInt64LE(1_000_000n, 219); // min_mint_amount = $1.00
     return buf;
   }
 
   /** Build a valid StakingConfig account buffer (offsets per earn-onchain.ts). */
   function buildStakingConfigData(active: bigint): Buffer {
-    const buf = Buffer.alloc(331);
+    const buf = Buffer.alloc(234);
     buf.write('2d86fc5225395419', 0, 'hex'); // STAKING discriminator
-    Keypair.generate().publicKey.toBuffer().copy(buf, 73); // pause_authorities[0]
-    Keypair.generate().publicKey.toBuffer().copy(buf, 170); // rwt_mint
-    Keypair.generate().publicKey.toBuffer().copy(buf, 202); // strwt_mint
-    Keypair.generate().publicKey.toBuffer().copy(buf, 234); // reward_depositor
-    Keypair.generate().publicKey.toBuffer().copy(buf, 266); // pool_vault
-    buf.writeBigUInt64LE(active, 298); // total_rwt_active
-    buf.writeBigUInt64LE(0n, 306); // total_rwt_reserved
+    Keypair.generate().publicKey.toBuffer().copy(buf, 73); // rwt_mint
+    Keypair.generate().publicKey.toBuffer().copy(buf, 105); // strwt_mint
+    Keypair.generate().publicKey.toBuffer().copy(buf, 137); // reward_depositor
+    Keypair.generate().publicKey.toBuffer().copy(buf, 169); // pool_vault
+    buf.writeBigUInt64LE(active, 201); // total_rwt_active
+    buf.writeBigUInt64LE(0n, 209); // total_rwt_reserved
     return buf;
   }
 
