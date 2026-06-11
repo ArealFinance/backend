@@ -14,36 +14,36 @@
  * Layout verification (offsets are relative to the start of `account.data`,
  * i.e. INCLUDING the 8-byte Arlex discriminator):
  *
- *   EarnConfig (contracts/earn/src/state.rs, repr(C,packed), SIZE=253, SPACE=261)
+ *   EarnConfig (contracts/earn/src/state.rs, repr(C,packed), SIZE=317, SPACE=325)
  *     8   total_invested_capital : u128 (16 bytes, LE)   <- Book NAV numerator
  *     24  authority              : [u8;32]
  *     56  pending_authority      : [u8;32]
  *     88  has_pending            : bool (1)
- *     89  pause_authority        : [u8;32]
- *     121 is_paused              : bool (1)
- *     122 mint_fee_bps           : u16 (2)
- *     124 basket_vault           : [u8;32]
- *     156 dao_fee_destination    : [u8;32]
- *     188 rwt_mint               : [u8;32]   <- earn-RWT mint
- *     220 usdc_mint              : [u8;32]   <- earn USDC mint
- *     252 min_mint_amount        : u64 (8)
- *     260 bump                   : u8 (1)
+ *     89  pause_authorities      : [[u8;32];3] (96)   <- 3 guardian slots
+ *     185 is_paused              : bool (1)
+ *     186 mint_fee_bps           : u16 (2)
+ *     188 basket_vault           : [u8;32]
+ *     220 dao_fee_destination    : [u8;32]
+ *     252 rwt_mint               : [u8;32]   <- earn-RWT mint
+ *     284 usdc_mint              : [u8;32]   <- earn USDC mint
+ *     316 min_mint_amount        : u64 (8)
+ *     324 bump                   : u8 (1)
  *
- *   StakingConfig (contracts/staking/src/state.rs, repr(C,packed), SIZE=259, SPACE=267)
+ *   StakingConfig (contracts/staking/src/state.rs, repr(C,packed), SIZE=323, SPACE=331)
  *     8   authority         : [u8;32]
  *     40  pending_authority : [u8;32]
  *     72  has_pending       : bool (1)
- *     73  pause_authority   : [u8;32]
- *     105 is_paused         : bool (1)
- *     106 rwt_mint          : [u8;32]   <- staked token (earn-RWT)
- *     138 strwt_mint        : [u8;32]   <- share token
- *     170 reward_depositor  : [u8;32]   <- only caller of deposit_rewards (= deployer)
- *     202 pool_vault        : [u8;32]   <- RWT ATA owned by StakingConfig PDA
- *     234 total_rwt_active  : u64 (8)   <- rate numerator
- *     242 total_rwt_reserved: u64 (8)
- *     250 cooldown_seconds  : i64 (8)
- *     258 min_stake_amount  : u64 (8)
- *     266 bump              : u8 (1)
+ *     73  pause_authorities : [[u8;32];3] (96)   <- 3 guardian slots
+ *     169 is_paused         : bool (1)
+ *     170 rwt_mint          : [u8;32]   <- staked token (earn-RWT)
+ *     202 strwt_mint        : [u8;32]   <- share token
+ *     234 reward_depositor  : [u8;32]   <- only caller of deposit_rewards (= deployer)
+ *     266 pool_vault        : [u8;32]   <- RWT ATA owned by StakingConfig PDA
+ *     298 total_rwt_active  : u64 (8)   <- rate numerator
+ *     306 total_rwt_reserved: u64 (8)
+ *     314 cooldown_seconds  : i64 (8)
+ *     322 min_stake_amount  : u64 (8)
+ *     330 bump              : u8 (1)
  *
  * Live devnet cross-check (2026-06-03, earn=HGh7Tcuq…, staking=CmKXHk3u…):
  *   EarnConfig.total_invested_capital = 1_057_000_000, rwt_mint = 8hJPUC…,
@@ -126,22 +126,43 @@ export const STAKING_CONFIG_SEED = Buffer.from('staking_config');
 
 const EARN_OFF = {
   totalInvestedCapital: 8, // u128
-  mintFeeBps: 122, // u16 (mint fee in basis points)
-  basketVault: 124,
-  daoFeeDestination: 156,
-  rwtMint: 188,
-  usdcMint: 220,
-  minMintAmount: 252, // u64 (anti-dust floor for mint_rwt — $1.00 in 6-dec)
+  pauseAuthorities: 89, // [[u8;32];3] — 3 guardian slots (96 bytes)
+  mintFeeBps: 186, // u16 (mint fee in basis points)
+  basketVault: 188,
+  daoFeeDestination: 220,
+  rwtMint: 252,
+  usdcMint: 284,
+  minMintAmount: 316, // u64 (anti-dust floor for mint_rwt — $1.00 in 6-dec)
 } as const;
 
 const STAKING_OFF = {
-  rwtMint: 106,
-  strwtMint: 138,
-  rewardDepositor: 170,
-  poolVault: 202,
-  totalRwtActive: 234, // u64
-  totalRwtReserved: 242, // u64
+  pauseAuthorities: 73, // [[u8;32];3] — 3 guardian slots (96 bytes)
+  rwtMint: 170,
+  strwtMint: 202,
+  rewardDepositor: 234,
+  poolVault: 266,
+  totalRwtActive: 298, // u64
+  totalRwtReserved: 306, // u64
 } as const;
+
+/** Number of pause-guardian slots in `pause_authorities` ([[u8;32];3]). */
+const PAUSE_AUTHORITY_SLOTS = 3;
+/** A 32-byte all-zero key marks an unused guardian slot (on-chain semantics). */
+const ZERO_KEY_BASE58 = new PublicKey(new Uint8Array(32)).toBase58();
+
+/**
+ * Read the `pause_authorities` array starting at `off` and return the active
+ * (non-zero) guardian addresses as base58 strings. A zeroed slot = unused and
+ * is filtered out, matching the on-chain "a zeroed slot = unused" convention.
+ */
+function readPauseAuthorities(buf: Buffer, off: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < PAUSE_AUTHORITY_SLOTS; i++) {
+    const key = readPubkey(buf, off + i * 32).toBase58();
+    if (key !== ZERO_KEY_BASE58) out.push(key);
+  }
+  return out;
+}
 
 const EARN_DISCRIMINATOR = Buffer.from([0x8f, 0x6e, 0x3f, 0xb5, 0x95, 0x8c, 0xbe, 0x90]);
 const STAKING_DISCRIMINATOR = Buffer.from([0x2d, 0x86, 0xfc, 0x52, 0x25, 0x39, 0x54, 0x19]);
@@ -168,6 +189,8 @@ export interface DecodedEarnConfig {
   usdcMint: PublicKey;
   /** Anti-dust floor enforced by mint_rwt (`BelowMinMint` if usdc_amount < this). */
   minMintAmount: bigint;
+  /** Active pause guardians (base58); zeroed/unused slots filtered out. */
+  pauseAuthorities: string[];
 }
 
 /**
@@ -178,8 +201,8 @@ export interface DecodedEarnConfig {
  * too short. Callers should surface the throw as a skipped tick, never a crash.
  */
 export function decodeEarnConfig(data: Buffer): DecodedEarnConfig {
-  if (data.length < 261) {
-    throw new Error(`EarnConfig too short: ${data.length} bytes (expected >= 261)`);
+  if (data.length < 325) {
+    throw new Error(`EarnConfig too short: ${data.length} bytes (expected >= 325)`);
   }
   if (!data.subarray(0, 8).equals(EARN_DISCRIMINATOR)) {
     throw new Error('EarnConfig discriminator mismatch — wrong account?');
@@ -192,6 +215,7 @@ export function decodeEarnConfig(data: Buffer): DecodedEarnConfig {
     rwtMint: readPubkey(data, EARN_OFF.rwtMint),
     usdcMint: readPubkey(data, EARN_OFF.usdcMint),
     minMintAmount: data.readBigUInt64LE(EARN_OFF.minMintAmount),
+    pauseAuthorities: readPauseAuthorities(data, EARN_OFF.pauseAuthorities),
   };
 }
 
@@ -203,6 +227,8 @@ export interface DecodedStakingConfig {
   poolVault: PublicKey;
   totalRwtActive: bigint;
   totalRwtReserved: bigint;
+  /** Active pause guardians (base58); zeroed/unused slots filtered out. */
+  pauseAuthorities: string[];
 }
 
 /**
@@ -210,8 +236,8 @@ export interface DecodedStakingConfig {
  * length guards as `decodeEarnConfig`.
  */
 export function decodeStakingConfig(data: Buffer): DecodedStakingConfig {
-  if (data.length < 267) {
-    throw new Error(`StakingConfig too short: ${data.length} bytes (expected >= 267)`);
+  if (data.length < 331) {
+    throw new Error(`StakingConfig too short: ${data.length} bytes (expected >= 331)`);
   }
   if (!data.subarray(0, 8).equals(STAKING_DISCRIMINATOR)) {
     throw new Error('StakingConfig discriminator mismatch — wrong account?');
@@ -223,6 +249,7 @@ export function decodeStakingConfig(data: Buffer): DecodedStakingConfig {
     poolVault: readPubkey(data, STAKING_OFF.poolVault),
     totalRwtActive: data.readBigUInt64LE(STAKING_OFF.totalRwtActive),
     totalRwtReserved: data.readBigUInt64LE(STAKING_OFF.totalRwtReserved),
+    pauseAuthorities: readPauseAuthorities(data, STAKING_OFF.pauseAuthorities),
   };
 }
 
