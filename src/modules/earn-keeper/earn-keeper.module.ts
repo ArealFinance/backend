@@ -46,6 +46,8 @@ import {
   STAKING_CONFIG_PDA,
   STAKING_CONFIG_SEED,
   STRWT_MINT,
+  expectedEarnProgramId,
+  expectedStakingProgramId,
   resolveEarnProgramId,
   resolveStakingProgramId,
 } from '../earn-snapshot/earn-onchain.js';
@@ -55,10 +57,6 @@ import { KEEPER_AUTHORITY_KEYPAIR } from './keeper.tokens.js';
 
 /** Expected devnet deployer pubkey — the keeper signer boot-time pin. */
 const DEFAULT_EXPECTED_KEEPER_AUTHORITY = '8ddRxwGnC1MD5ZCf22eLAne77Rput8itQbTjMr93xYvq';
-
-/** Expected SDK devnet program IDs (Gate 3 pin). */
-const EXPECTED_EARN_PROGRAM_ID = 'HGh7TcuqUbTRrFTYBUtsTctAEEmsANWnDxeWcbgqMg8b';
-const EXPECTED_STAKING_PROGRAM_ID = 'CmKXHk3u6pDUC6Q11Le6gmhCgENQSFvduisXb7guUGoL';
 
 export function resolveExpectedKeeperAuthority(envValue?: string | null): string {
   const trimmed = envValue?.trim();
@@ -85,39 +83,57 @@ export function assertDevnetPins(config: ConfigService): GateResult {
   const earnProgramId = resolveEarnProgramId(config.get<string>('earn.programId'));
   const stakingProgramId = resolveStakingProgramId(config.get<string>('earn.stakingProgramId'));
 
-  // Gate 3a — program IDs must equal the expected devnet pins.
-  if (earnProgramId.toBase58() !== EXPECTED_EARN_PROGRAM_ID) {
+  // Gate 3a — program IDs must equal the EXPECTED pin for the ACTIVE cluster.
+  // The expected values are network-keyed (earn-onchain.ts), so a mainnet deploy
+  // (SOLANA_CLUSTER=mainnet) compares against the mainnet pin instead of the
+  // devnet literal. The gate's INTENT is unchanged — reject a MISCONFIGURED /
+  // drifted program ID — it just no longer hardcodes devnet as the only valid
+  // target. (The keeper still never SIGNS off devnet/localnet — Gate 1 returns
+  // null on mainnet — so this branch only matters for catching a typo'd
+  // EARN_PROGRAM_ID / STAKING_PROGRAM_ID env on whichever cluster is active.)
+  const expectedEarn = expectedEarnProgramId(cluster);
+  const expectedStaking = expectedStakingProgramId(cluster);
+  if (earnProgramId.toBase58() !== expectedEarn) {
     return {
       ok: false,
-      reason: `keeper Gate 3: earn program ID mismatch (expected ${EXPECTED_EARN_PROGRAM_ID}, got ${earnProgramId.toBase58()})`,
+      reason: `keeper Gate 3: earn program ID mismatch (expected ${expectedEarn} for cluster=${cluster}, got ${earnProgramId.toBase58()})`,
     };
   }
-  if (stakingProgramId.toBase58() !== EXPECTED_STAKING_PROGRAM_ID) {
+  if (stakingProgramId.toBase58() !== expectedStaking) {
     return {
       ok: false,
-      reason: `keeper Gate 3: staking program ID mismatch (expected ${EXPECTED_STAKING_PROGRAM_ID}, got ${stakingProgramId.toBase58()})`,
+      reason: `keeper Gate 3: staking program ID mismatch (expected ${expectedStaking} for cluster=${cluster}, got ${stakingProgramId.toBase58()})`,
     };
   }
 
-  // Gate 3b — derived config PDAs must equal the pinned literals.
+  // Gate 3b — derived config PDAs. On devnet/localnet (the only clusters the
+  // keeper can run on) we assert the derived PDA equals the pinned devnet
+  // singleton — the original anti-drift tripwire. On any other cluster the
+  // devnet PDA literals don't apply, so we only assert the PDAs DERIVE cleanly
+  // (findProgramAddressSync never throws for a valid program ID, so this is a
+  // structural sanity check that the program IDs are well-formed).
   const earnPda = PublicKey.findProgramAddressSync([EARN_CONFIG_SEED], earnProgramId)[0];
   const stakingPda = PublicKey.findProgramAddressSync([STAKING_CONFIG_SEED], stakingProgramId)[0];
-  if (earnPda.toBase58() !== EARN_CONFIG_PDA) {
-    return {
-      ok: false,
-      reason: `keeper Gate 3: EarnConfig PDA mismatch (expected ${EARN_CONFIG_PDA}, got ${earnPda.toBase58()})`,
-    };
-  }
-  if (stakingPda.toBase58() !== STAKING_CONFIG_PDA) {
-    return {
-      ok: false,
-      reason: `keeper Gate 3: StakingConfig PDA mismatch (expected ${STAKING_CONFIG_PDA}, got ${stakingPda.toBase58()})`,
-    };
+  if (isRunnableCluster(cluster)) {
+    if (earnPda.toBase58() !== EARN_CONFIG_PDA) {
+      return {
+        ok: false,
+        reason: `keeper Gate 3: EarnConfig PDA mismatch (expected ${EARN_CONFIG_PDA}, got ${earnPda.toBase58()})`,
+      };
+    }
+    if (stakingPda.toBase58() !== STAKING_CONFIG_PDA) {
+      return {
+        ok: false,
+        reason: `keeper Gate 3: StakingConfig PDA mismatch (expected ${STAKING_CONFIG_PDA}, got ${stakingPda.toBase58()})`,
+      };
+    }
   }
 
-  // Gate 3c — the pinned mints must parse (catches a typo at boot, not tick).
-  // The on-chain rwt_mint / strwt_mint are validated by the programs at tx
-  // time; here we just assert the constants are well-formed base58.
+  // Gate 3c — the pinned devnet mints must parse (catches a typo at boot, not
+  // tick). These constants are devnet singletons; on mainnet the on-chain
+  // rwt_mint / strwt_mint are read from EarnConfig/StakingConfig at runtime, so
+  // here we only assert the devnet constants are well-formed base58 (a cheap
+  // boot tripwire that never runs a chain read).
   try {
     void new PublicKey(EARN_RWT_MINT);
     void new PublicKey(STRWT_MINT);

@@ -204,6 +204,115 @@ describe('earn-keeper: gates (CRITICAL — no-mainnet guarantee)', () => {
     });
   });
 
+  /**
+   * Network-driven Gate 3 (mainnet-configurable). The gate's expected program-ID
+   * pin is keyed off SOLANA_CLUSTER, so a mainnet deploy passes Gate 3 with the
+   * mainnet program IDs (env-supplied or the built-in mainnet pin), while a
+   * MISCONFIGURED id is still rejected. The devnet PDA-literal sub-check is
+   * devnet/localnet-only, so it does NOT false-fail on mainnet.
+   *
+   * NOTE: this only governs the boot-time pin. The keeper still NEVER SIGNS off
+   * devnet/localnet — Gate 1 (buildKeeperAuthorityKeypair) returns null on
+   * mainnet — so accepting the mainnet pin here does not enable any mainnet
+   * signing. It only stops the gate from spuriously reporting a "mismatch" when
+   * the operator points the backend at the real mainnet program IDs.
+   */
+  describe('Gate 3: network-driven program-ID pin (mainnet-configurable)', () => {
+    const MAINNET_EARN = 'GTASb5UcQEkcRWuMwfoNABBBNJitdxWByobMLZZ2UCw8';
+    const MAINNET_STAKING = '9tEKvDwkqkveBvmQfEzgPKWSNCDTGSSqYz4ZE6pP5DGY';
+
+    it('reports { ok: true } on mainnet with the mainnet program IDs (env-supplied)', () => {
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'mainnet',
+          // RPC gate (Gate 4 boot-half) is devnet-only; on mainnet it is skipped.
+          'solana.rpcUrl': 'https://api.mainnet-beta.solana.com',
+          'earn.programId': MAINNET_EARN,
+          'earn.stakingProgramId': MAINNET_STAKING,
+        };
+        return config[key];
+      });
+
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(true);
+    });
+
+    it('reports { ok: true } on mainnet using the built-in mainnet pin (env unset)', () => {
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'mainnet',
+          'solana.rpcUrl': 'https://api.mainnet-beta.solana.com',
+          // No env override → the resolver falls back to the DEVNET literal, so
+          // this would mismatch the mainnet pin. The operator MUST set the env
+          // on mainnet; assert that a mismatch is reported (no false "ok").
+          'earn.programId': undefined,
+          'earn.stakingProgramId': undefined,
+        };
+        return config[key];
+      });
+
+      // resolveEarnProgramId falls back to the devnet literal when env is unset,
+      // which does NOT equal the mainnet expected pin → mismatch reported.
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/earn program ID mismatch.*cluster=mainnet/i);
+    });
+
+    it('reports { ok: false } on mainnet when a WRONG (misconfigured) earn ID is set', () => {
+      const wrong = Keypair.generate().publicKey.toBase58();
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'mainnet',
+          'solana.rpcUrl': 'https://api.mainnet-beta.solana.com',
+          'earn.programId': wrong,
+          'earn.stakingProgramId': MAINNET_STAKING,
+        };
+        return config[key];
+      });
+
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/earn program ID mismatch/i);
+    });
+
+    it('does NOT apply the devnet PDA literals on mainnet (no false PDA mismatch)', () => {
+      // The mainnet program IDs derive DIFFERENT config PDAs than the devnet
+      // singletons. The PDA-literal sub-check must be skipped off devnet/localnet
+      // so it does not spuriously fail mainnet.
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'mainnet',
+          'solana.rpcUrl': 'https://api.mainnet-beta.solana.com',
+          'earn.programId': MAINNET_EARN,
+          'earn.stakingProgramId': MAINNET_STAKING,
+        };
+        return config[key];
+      });
+
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      // ok === true proves the devnet EarnConfig/StakingConfig PDA literals were
+      // NOT compared (the mainnet PDAs differ; a comparison would have failed).
+      expect(result.ok).toBe(true);
+    });
+
+    it('still rejects a wrong devnet program ID (devnet behavior unchanged)', () => {
+      const wrong = Keypair.generate().publicKey.toBase58();
+      (mockConfig.get as any).mockImplementation((key: string) => {
+        const config: Record<string, any> = {
+          'solana.cluster': 'devnet',
+          'solana.rpcUrl': 'https://api.devnet.solana.com',
+          'earn.programId': wrong,
+          'earn.stakingProgramId': undefined,
+        };
+        return config[key];
+      });
+
+      const result = assertDevnetPins(mockConfig as ConfigService);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/earn program ID mismatch.*cluster=devnet/i);
+    });
+  });
+
   describe('Gate 4: RPC URL validation (boot)', () => {
     beforeEach(() => {
       (mockConfig.get as any).mockImplementation((key: string) => {

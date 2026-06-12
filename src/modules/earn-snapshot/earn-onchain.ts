@@ -92,7 +92,7 @@ export const EARN_RWT_MINT = '8hJPUC4UNsiyBh5cosTA8RqY9TbBSmnxqkBb2sHJ5qzM';
 export const STRWT_MINT = 'EnvY1tsk4SLMPi4uThXCk4dbagtRJ1WdaTFYPKDroNwy';
 
 /**
- * Earn / staking program IDs (devnet).
+ * Earn / staking program IDs (per-cluster).
  *
  * Pinned here as literals — NOT sourced from `@areal/sdk/network` — because the
  * SDK's built `dist` (the version the backend links) predates the earn/staking
@@ -100,13 +100,51 @@ export const STRWT_MINT = 'EnvY1tsk4SLMPi4uThXCk4dbagtRJ1WdaTFYPKDroNwy';
  * at runtime. Pinning + an env override (`EARN_PROGRAM_ID` / `STAKING_PROGRAM_ID`)
  * mirrors the faucet's earn-USDC mint-pin discipline: a redeploy that rotates a
  * program ID propagates via env without a code change, and the keeper's Gate 3
- * asserts the resolved value matches these expected constants.
+ * asserts the resolved value matches the expected pin for the active cluster.
  *
- * Source of truth: `data/devnet-addresses.json` (2026-05-31 re-bootstrap) and
- * `sdk/src/network/program-ids.ts`.
+ * Source of truth:
+ *   devnet  — `data/devnet-addresses.json` (2026-05-31 re-bootstrap)
+ *   mainnet — earn/staking mainnet deployment (2026-06-12)
+ *   plus `sdk/src/network/program-ids.ts`.
+ *
+ * Devnet is the DEFAULT (back-compat); the mainnet pins are additive and only
+ * become the expected values when `SOLANA_CLUSTER=mainnet`. The standalone
+ * `EARN_PROGRAM_ID` / `STAKING_PROGRAM_ID` exports remain the devnet literals so
+ * existing callers and the resolver's fallback are unchanged.
  */
 export const EARN_PROGRAM_ID = 'HGh7TcuqUbTRrFTYBUtsTctAEEmsANWnDxeWcbgqMg8b';
 export const STAKING_PROGRAM_ID = 'CmKXHk3u6pDUC6Q11Le6gmhCgENQSFvduisXb7guUGoL';
+
+/**
+ * Per-cluster earn/staking program-ID pins. The keeper's Gate 3 resolves the
+ * EXPECTED program IDs from this table keyed by `SOLANA_CLUSTER` (env override
+ * still wins), so a mainnet deploy passes the gate without hardcoding mainnet as
+ * the default. `localnet` reuses the devnet pins (local dev mirrors devnet).
+ */
+export const EARN_PROGRAM_IDS_BY_CLUSTER: Record<string, string> = {
+  devnet: EARN_PROGRAM_ID,
+  localnet: EARN_PROGRAM_ID,
+  mainnet: 'GTASb5UcQEkcRWuMwfoNABBBNJitdxWByobMLZZ2UCw8',
+};
+export const STAKING_PROGRAM_IDS_BY_CLUSTER: Record<string, string> = {
+  devnet: STAKING_PROGRAM_ID,
+  localnet: STAKING_PROGRAM_ID,
+  mainnet: '9tEKvDwkqkveBvmQfEzgPKWSNCDTGSSqYz4ZE6pP5DGY',
+};
+
+/**
+ * Expected earn program ID for a cluster — the Gate 3 anti-drift pin. Falls back
+ * to the devnet literal for any unknown/unset cluster (back-compat; the keeper
+ * itself never runs off devnet/localnet, so the pin is only consulted there).
+ */
+export function expectedEarnProgramId(cluster?: string | null): string {
+  return EARN_PROGRAM_IDS_BY_CLUSTER[cluster ?? ''] ?? EARN_PROGRAM_ID;
+}
+
+/** Expected staking program ID for a cluster — see `expectedEarnProgramId`. */
+export function expectedStakingProgramId(cluster?: string | null): string {
+  return STAKING_PROGRAM_IDS_BY_CLUSTER[cluster ?? ''] ?? STAKING_PROGRAM_ID;
+}
 
 /** Resolve the earn program ID — `EARN_PROGRAM_ID` env override > pinned literal. */
 export function resolveEarnProgramId(envValue?: string | null): PublicKey {
