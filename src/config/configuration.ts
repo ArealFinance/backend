@@ -7,6 +7,12 @@
  * it trivial to mock config in tests (just register a stub provider).
  */
 
+import {
+  DEFAULT_RPC_PROXY_CACHE_TTL_MS,
+  DEFAULT_RPC_PROXY_RATE_LIMIT,
+  DEFAULT_RPC_PROXY_RATE_TTL_MS,
+} from '../modules/rpc-proxy/rpc-proxy.constants.js';
+
 export type SolanaCluster = 'mainnet' | 'devnet' | 'localnet';
 
 const DEFAULT_PORT = 3010;
@@ -18,6 +24,18 @@ const DEFAULT_MAX_RECONCILE_SIGNATURES = 50_000;
 // holds the in-flight signatures + bull payloads. ReconcileService will
 // continue to close any residual gap on its 5-min cron after the cap fires.
 const DEFAULT_MAX_BACKFILL_SIGNATURES = 50_000;
+
+// -- RPC proxy defaults -------------------------------------------------------
+// Per-IP rate limit (DEFAULT_RPC_PROXY_RATE_LIMIT / _RATE_TTL_MS) is defined in
+// rpc-proxy.constants.ts and imported above, so the documented default here and
+// the controller's static @Throttle decorator can never drift apart.
+//
+// Body-size cap (bytes). A signed `sendTransaction` is a few KB at most; 100KB
+// leaves room for a wide batch while rejecting absurd payloads early.
+const DEFAULT_RPC_PROXY_MAX_BODY_BYTES = 100_000;
+// Upstream fetch timeout (ms). A hung Helius response must not pile up open
+// sockets — abort and surface a JSON-RPC upstream error instead.
+const DEFAULT_RPC_PROXY_UPSTREAM_TIMEOUT_MS = 15_000;
 
 function asInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -108,6 +126,26 @@ export default () => {
 
     metrics: {
       enabled: asBool(process.env.METRICS_ENABLED, true),
+    },
+
+    // Public JSON-RPC proxy (`POST /rpc`). Forwards a locked-down allow-list of
+    // methods to the server-side `solana.rpcUrl` so the web app / Seeker APK
+    // never embed a Helius key client-side. All knobs are env-overridable so an
+    // operator can tighten the rate limit without a code change.
+    rpcProxy: {
+      rateLimit: asInt(process.env.RPC_PROXY_RATE_LIMIT, DEFAULT_RPC_PROXY_RATE_LIMIT),
+      rateTtlMs: asInt(process.env.RPC_PROXY_RATE_TTL_MS, DEFAULT_RPC_PROXY_RATE_TTL_MS),
+      maxBodyBytes: asInt(process.env.RPC_PROXY_MAX_BODY_BYTES, DEFAULT_RPC_PROXY_MAX_BODY_BYTES),
+      upstreamTimeoutMs: asInt(
+        process.env.RPC_PROXY_UPSTREAM_TIMEOUT_MS,
+        DEFAULT_RPC_PROXY_UPSTREAM_TIMEOUT_MS,
+      ),
+      // Hot-read cache (getLatestBlockhash / getSlot / getEpochInfo). Default ON
+      // — these are the highest-frequency calls and a ~2s-stale blockhash is
+      // safe (web3.js refreshes on BlockhashNotFound). Disable with
+      // RPC_PROXY_CACHE_ENABLED=false if an issue surfaces.
+      cacheEnabled: asBool(process.env.RPC_PROXY_CACHE_ENABLED, true),
+      cacheTtlMs: asInt(process.env.RPC_PROXY_CACHE_TTL_MS, DEFAULT_RPC_PROXY_CACHE_TTL_MS),
     },
 
     // Localnet-only test-USDC faucet. The actual constants

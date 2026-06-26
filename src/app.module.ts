@@ -3,9 +3,10 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { RealIpThrottlerGuard } from './common/net/real-ip-throttler.guard.js';
 import { SolanaConnectionModule } from './common/solana/connection.module.js';
 import configuration from './config/configuration.js';
 import { ClaimHistory } from './entities/claim-history.entity.js';
@@ -30,6 +31,7 @@ import { PortfolioModule } from './modules/portfolio/portfolio.module.js';
 import { MarketsModule } from './modules/markets/markets.module.js';
 import { ProjectionsModule } from './modules/projections/projections.module.js';
 import { RealtimeModule } from './modules/realtime/realtime.module.js';
+import { RpcProxyModule } from './modules/rpc-proxy/rpc-proxy.module.js';
 import { TransactionsModule } from './modules/transactions/transactions.module.js';
 
 /**
@@ -95,6 +97,9 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
       },
     }),
     ScheduleModule.forRoot(),
+    // TODO: switch to nestjs-throttler-storage-redis (Redis already wired) when
+    // the API splits to multiple replicas — until then the limit is per-replica
+    // (in-memory storage), so the effective cluster-wide limit is N×limit.
     ThrottlerModule.forRoot([
       {
         ttl: 60_000,
@@ -112,6 +117,10 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
     PortfolioModule,
     RealtimeModule,
     MarketsModule,
+    // Public JSON-RPC proxy (`POST /rpc`) — forwards an allow-listed set of
+    // methods to the server-side Solana RPC so the web app / Seeker APK never
+    // embed the Helius key client-side.
+    RpcProxyModule,
     EarnSnapshotModule,
     // Devnet-ONLY yield keeper — registered always so the cron exists, but
     // inert unless its five fail-closed gates pass (see EarnKeeperModule). Can
@@ -119,10 +128,16 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
     EarnKeeperModule,
   ],
   providers: [
-    // Apply ThrottlerGuard globally so every controller route gets rate-limited
+    // Apply the throttler globally so every controller route gets rate-limited
     // by the default policy (60 req/min/IP). Routes that need a tighter or
-    // looser limit override per-handler via `@Throttle({...})` — see auth.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // looser limit override per-handler via `@Throttle({...})` — see auth + rpc.
+    //
+    // We use RealIpThrottlerGuard (not the stock ThrottlerGuard): behind
+    // Cloudflared/nginx the stock guard keys on `req.ip` = the single proxy-hop
+    // IP, collapsing all external clients into ONE bucket. The custom guard
+    // resolves the real client IP from XFF/X-Real-IP (prod only) via the same
+    // helper the WS handshake throttle uses, so HTTP and WS key identically.
+    { provide: APP_GUARD, useClass: RealIpThrottlerGuard },
   ],
 })
 export class AppModule {}

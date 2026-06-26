@@ -11,21 +11,12 @@ import {
 } from '@nestjs/websockets';
 import type { Server, Socket } from 'socket.io';
 
+import { resolveClientIpFromHeaders } from '../../common/net/client-ip.js';
 import type { JwtPayload } from '../auth/strategies/jwt.strategy.js';
 import { MetricsService } from '../metrics/metrics.service.js';
 import { HandshakeThrottleService } from './handshake-throttle.js';
 import { extractJwtFromHandshake } from './jwt-handshake.js';
 import { parseRoom } from './rooms.js';
-
-/**
- * Trust the `x-forwarded-for` header only in production, where the API sits
- * behind Cloudflared / a known reverse proxy that overwrites the header
- * (so a client-supplied value is replaced before reaching us). In dev a
- * curl from localhost can spoof XFF freely, so we ignore it and use the
- * direct `client.handshake.address` instead — otherwise an attacker on a
- * local LAN could trivially bypass the per-IP throttle by varying XFF.
- */
-const IP_HEADER_TRUSTED = process.env.NODE_ENV === 'production';
 
 /**
  * CORS allow-list for the `/realtime` namespace. Mirrored from `main.ts`'s
@@ -91,9 +82,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     try {
       const verdict = await this.throttle.checkAndRecord(ip);
       if (!verdict.ok) {
-        this.logger.warn(
-          `handshake rejected: ip=${ip} retry_after=${verdict.retryAfterSec}s`,
-        );
+        this.logger.warn(`handshake rejected: ip=${ip} retry_after=${verdict.retryAfterSec}s`);
         this.metrics.realtimeHandshakeRejected.inc({ reason: 'rate_limit' });
         client.disconnect(true);
         return;
@@ -216,33 +205,11 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 /**
  * Resolves the source IP for a Socket.IO client.
  *
- * In production we trust `x-forwarded-for` (Cloudflared sets it after
- * stripping any client-supplied value). In dev / staging we ignore the
- * header and use the direct connection address — otherwise an attacker on
- * the local network could spoof XFF to bypass the per-IP throttle.
- *
- * Sanitisation: strip the `::ffff:` IPv4-mapped-IPv6 prefix Node.js
- * surfaces on dual-stack listeners so `192.168.1.1` and `::ffff:192.168.1.1`
- * don't end up as separate keys in Redis.
+ * Delegates to the shared {@link resolveClientIpFromHeaders} so the WS
+ * handshake throttle and the REST RPC-proxy throttler key on IDENTICAL client
+ * IPs (same trust model, same `::ffff:` normalisation, same XFF/X-Real-IP
+ * fallback). See `common/net/client-ip.ts` for the trust rationale.
  */
 function resolveClientIp(client: Socket): string {
-  let raw: string | undefined;
-  if (IP_HEADER_TRUSTED) {
-    const xff = client.handshake.headers['x-forwarded-for'];
-    const flat = Array.isArray(xff) ? xff[0] : xff;
-    if (typeof flat === 'string' && flat.length > 0) {
-      // XFF can carry a chain `client, proxy1, proxy2`; the leftmost is
-      // the originating client.
-      raw = flat.split(',')[0]?.trim();
-    }
-  }
-  if (!raw) {
-    raw = client.handshake.address;
-  }
-  if (!raw) return 'unknown';
-  // Normalise IPv4-mapped-IPv6 (`::ffff:1.2.3.4` → `1.2.3.4`).
-  if (raw.startsWith('::ffff:')) {
-    return raw.slice('::ffff:'.length);
-  }
-  return raw;
+  return resolveClientIpFromHeaders(client.handshake.headers, client.handshake.address);
 }
