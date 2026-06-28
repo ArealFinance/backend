@@ -1,0 +1,66 @@
+# Standalone RPC-proxy-only stack.
+#
+# Runs ONE backend container in RPC-proxy-only mode (`RPC_PROXY_ONLY=true`): a
+# lightweight Solana JSON-RPC proxy that serves `POST /rpc` (+ `GET /health`)
+# and nothing else. It hides the server-side Helius key from the client bundle.
+#
+# WHY a separate compose: the main stack (docker-compose.prod.template.yml) is
+# the heavy devnet indexer — Postgres + Redis + the full AppModule. This proxy
+# is an ISOLATED mainnet microservice with NO DB / Redis / indexer / keeper /
+# WS, so it has no `depends_on` and binds nothing but the proxy port.
+#
+# Usage (run from `areal.newera/backend/`, build context is the meta-repo root
+# so the Dockerfile can `COPY sdk` / `COPY vendor` — same as the prod template):
+#
+#   RPC_URL_MAINNET=https://<your-helius-url> \
+#     docker compose -f docker-compose.proxy.yml up -d --build
+#
+# Or put RPC_URL_MAINNET (and any RPC_PROXY_* override) in an `.env` next to
+# this file. NEVER hardcode the Helius URL/key here.
+#
+# Hardening posture (same as the main stack):
+#   - The published port binds to 127.0.0.1 only. Internet exposure is via the
+#     reverse proxy (Cloudflared / nginx) — never bind to 0.0.0.0 host-side.
+
+services:
+  rpc-proxy:
+    build:
+      # Build context is the meta-repo root so the Dockerfile can `COPY sdk`
+      # and `COPY vendor` (siblings of `backend/`). The compose file lives
+      # inside backend/, so `..` resolves to areal.newera/. Reuses the exact
+      # same Dockerfile / image as the full backend — only the runtime env
+      # differs (RPC_PROXY_ONLY=true switches main.ts to the slim boot).
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: areal-rpc-proxy
+    restart: unless-stopped
+    # No depends_on: this service touches neither Postgres nor Redis.
+    ports:
+      # Host 127.0.0.1 only — the reverse proxy fronts the public surface.
+      # 3012 keeps it off the full backend's 3010 so both can coexist on a host.
+      - '127.0.0.1:${RPC_PROXY_PORT:-3012}:3012'
+    environment:
+      # Slim-boot switch: main.ts builds RpcProxyOnlyModule and returns before
+      # any TypeORM / Bull / Schedule / WS / metrics wiring.
+      RPC_PROXY_ONLY: 'true'
+      NODE_ENV: production
+      # Mainnet upstream selection. Default `mainnet` to match the canonical
+      # spelling in docker-compose.prod.template.yml (no drift between stacks);
+      # `configuration.ts` also accepts `mainnet-beta` as an alias. Either
+      # resolves `solana.rpcUrl` to RPC_URL_MAINNET.
+      SOLANA_CLUSTER: ${SOLANA_CLUSTER:-mainnet}
+      PORT: 3012
+      # The server-side mainnet RPC the proxy forwards to (Helius / private
+      # node). REQUIRED — supplied from env / secrets manager, NEVER hardcoded.
+      RPC_URL_MAINNET: ${RPC_URL_MAINNET}
+      # -- RPC proxy tunables (all optional; safe in-code defaults) -----------
+      # Per-IP rate limit + window.
+      RPC_PROXY_RATE_LIMIT: ${RPC_PROXY_RATE_LIMIT:-90}
+      RPC_PROXY_RATE_TTL_MS: ${RPC_PROXY_RATE_TTL_MS:-60000}
+      # Max request body size in bytes (413 above this).
+      RPC_PROXY_MAX_BODY_BYTES: ${RPC_PROXY_MAX_BODY_BYTES:-100000}
+      # Upstream RPC timeout in ms (504 on timeout).
+      RPC_PROXY_UPSTREAM_TIMEOUT_MS: ${RPC_PROXY_UPSTREAM_TIMEOUT_MS:-15000}
+      # Hot-read cache for getLatestBlockhash / getSlot / getEpochInfo.
+      RPC_PROXY_CACHE_ENABLED: ${RPC_PROXY_CACHE_ENABLED:-true}
+      RPC_PROXY_CACHE_TTL_MS: ${RPC_PROXY_CACHE_TTL_MS:-2000}

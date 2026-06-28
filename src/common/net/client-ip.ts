@@ -8,24 +8,35 @@
  * module is the single source of that logic.
  *
  * Trust model (R-12.3.1):
- *   - In production the API sits behind Cloudflared / nginx, which OVERWRITE
- *     `x-forwarded-for` with the real client chain (stripping any
- *     client-supplied value). So in prod we trust the leftmost XFF entry,
- *     falling back to `x-real-ip`, then the direct socket address.
- *   - In dev / staging a curl from localhost can set XFF freely, so we IGNORE
- *     the header and use the direct connection address — otherwise an attacker
- *     on the LAN could bypass the per-IP throttle by varying XFF.
+ *   - In production the API sits behind Cloudflare (orange-cloud) → nginx.
+ *     Resolution order, most-trusted first:
+ *       1. `CF-Connecting-IP` — Cloudflare sets this to the SINGLE real client
+ *          IP and OVERWRITES any client-supplied value, so it is unspoofable
+ *          behind CF. Prefer it whenever present.
+ *       2. `X-Real-IP` — nginx sets this to the single client IP.
+ *       3. leftmost `X-Forwarded-For` — last resort. NOTE: nginx uses
+ *          `$proxy_add_x_forwarded_for`, which APPENDS to any client-supplied
+ *          XFF, so the leftmost hop here can be CLIENT-SPOOFED. We only fall
+ *          back to it when both unspoofable headers above are absent (which,
+ *          behind CF, they never are) — keeping a sane key for non-CF paths
+ *          without letting a forged XFF bypass the per-IP throttle on the CF
+ *          path. This ordering is the whole reason the proxy's per-IP rate
+ *          limit (which protects the paid Helius quota) can't be rotated past.
+ *     Falls back to the direct socket address when none of the three are set.
+ *   - In dev / staging a curl from localhost can set any of these freely, so we
+ *     IGNORE all of them and use the direct connection address — otherwise an
+ *     attacker on the LAN could bypass the per-IP throttle by varying a header.
  *
  *   We deliberately do NOT enable Express `trust proxy` — that would make
  *   `req.ip` derive from a client-spoofable XFF in ALL environments. Gating on
- *   `NODE_ENV==='production'` (where the proxy is known to rewrite the header)
- *   is the safe equivalent.
+ *   `NODE_ENV==='production'` (where CF/nginx are known to set the trusted
+ *   headers) is the safe equivalent.
  *
  * Normalisation: strip the `::ffff:` IPv4-mapped-IPv6 prefix Node surfaces on
  * dual-stack listeners so `1.2.3.4` and `::ffff:1.2.3.4` don't become two keys.
  */
 
-/** True when XFF/X-Real-IP may be trusted (production only). */
+/** True when proxy-supplied client-IP headers may be trusted (production only). */
 export const IP_HEADER_TRUSTED = process.env.NODE_ENV === 'production';
 
 /** A header value as Node exposes it: string, string[] (repeated), or absent. */
@@ -59,15 +70,24 @@ export function resolveClientIpFromHeaders(
   let raw: string | undefined;
 
   if (trusted) {
-    const xff = firstHeader(headers['x-forwarded-for']);
-    if (xff) {
-      // XFF can carry a chain `client, proxy1, proxy2`; the leftmost is the
-      // originating client.
-      raw = xff.split(',')[0]?.trim();
-    }
+    // 1. CF-Connecting-IP — Cloudflare overwrites any client-supplied value
+    //    with the single real client IP, so it's unspoofable behind CF. This
+    //    MUST be checked before XFF: nginx's `$proxy_add_x_forwarded_for`
+    //    appends to a client-supplied XFF, so a forged leftmost XFF hop could
+    //    otherwise rotate past the per-IP throttle.
+    raw = firstHeader(headers['cf-connecting-ip'])?.trim();
+
     if (!raw) {
-      // Fall back to X-Real-IP (nginx sets this to the single client IP).
+      // 2. X-Real-IP — nginx sets this to the single client IP.
       raw = firstHeader(headers['x-real-ip'])?.trim();
+    }
+
+    if (!raw) {
+      // 3. Leftmost X-Forwarded-For (last resort; spoofable on non-CF paths —
+      //    see the module doc comment). XFF can carry a chain
+      //    `client, proxy1, proxy2`; the leftmost is the originating client.
+      const xff = firstHeader(headers['x-forwarded-for']);
+      if (xff) raw = xff.split(',')[0]?.trim();
     }
   }
 

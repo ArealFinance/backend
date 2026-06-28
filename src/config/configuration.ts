@@ -15,6 +15,19 @@ import {
 
 export type SolanaCluster = 'mainnet' | 'devnet' | 'localnet';
 
+/**
+ * Normalise the raw `SOLANA_CLUSTER` value to the internal `SolanaCluster`
+ * union. The public Solana SDK spells mainnet `mainnet-beta`; the repo's
+ * internal convention is `mainnet`. Accept both so a deploy can use either
+ * spelling without the `rpcUrl` selection silently falling through to the
+ * localnet branch (which would point the proxy at `RPC_URL_LOCALNET`).
+ */
+function normalizeCluster(raw: string | undefined): SolanaCluster {
+  if (raw === 'mainnet' || raw === 'mainnet-beta') return 'mainnet';
+  if (raw === 'localnet') return 'localnet';
+  return 'devnet';
+}
+
 const DEFAULT_PORT = 3010;
 const DEFAULT_BACKFILL_BLOCKS = 216_000; // ~1 day at 400ms slots
 const DEFAULT_RECONCILE_INTERVAL_SECS = 300; // 5 min
@@ -49,7 +62,16 @@ function asBool(value: string | undefined, fallback: boolean): boolean {
 }
 
 export default () => {
-  const cluster = (process.env.SOLANA_CLUSTER ?? 'devnet') as SolanaCluster;
+  const cluster = normalizeCluster(process.env.SOLANA_CLUSTER);
+
+  // True when booting the slim RPC-proxy-only mode (`RPC_PROXY_ONLY=true`): a
+  // standalone Solana RPC proxy with no DB / indexer / keeper / auth — only
+  // `POST /rpc` + `GET /health`. Read INSIDE the factory (not at module load)
+  // so it reflects the env at the moment ConfigModule calls this factory, the
+  // same way the JWT check below reads `process.env` live — a module-load
+  // capture would freeze whatever value happened to be set when this file was
+  // first imported (e.g. by a type-only import or another spec).
+  const rpcProxyOnly = process.env.RPC_PROXY_ONLY === 'true';
 
   // Fail-fast (R-12.3.1-8): an empty JWT_SECRET / JWT_REFRESH_SECRET would let
   // the process boot, then `JwtStrategy.validate` / refresh-token HMAC would
@@ -57,17 +79,25 @@ export default () => {
   // bad deploy is rejected before traffic ramps. The check lives INSIDE the
   // factory (not at module load) so dev-tools that import this file for
   // type-only purposes don't accidentally throw at import time.
-  if (!process.env.JWT_SECRET) {
-    throw new Error(
-      'JWT_SECRET environment variable is required — refusing to boot without it. ' +
-        'Set it in .env / deployment secrets.',
-    );
-  }
-  if (!process.env.JWT_REFRESH_SECRET) {
-    throw new Error(
-      'JWT_REFRESH_SECRET environment variable is required — the refresh-token HMAC ' +
-        'depends on it. Set it in .env / deployment secrets.',
-    );
+  //
+  // SKIPPED in RPC-proxy-only mode: that slim boot loads no AuthModule /
+  // JwtStrategy / refresh-token path, so a JWT secret is meaningless there.
+  // Requiring one would force operators to inject an unused secret into a
+  // service that never touches auth. The full-stack boot (RPC_PROXY_ONLY unset)
+  // keeps the guard exactly as before.
+  if (!rpcProxyOnly) {
+    if (!process.env.JWT_SECRET) {
+      throw new Error(
+        'JWT_SECRET environment variable is required — refusing to boot without it. ' +
+          'Set it in .env / deployment secrets.',
+      );
+    }
+    if (!process.env.JWT_REFRESH_SECRET) {
+      throw new Error(
+        'JWT_REFRESH_SECRET environment variable is required — the refresh-token HMAC ' +
+          'depends on it. Set it in .env / deployment secrets.',
+      );
+    }
   }
 
   return {

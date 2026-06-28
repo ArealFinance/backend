@@ -16,6 +16,7 @@ import 'reflect-metadata';
 
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 
@@ -26,6 +27,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { MetricsAppModule } from './modules/metrics/metrics-app.module.js';
 import { MetricsService } from './modules/metrics/metrics.service.js';
 import { RealtimeRedisIoAdapter } from './modules/realtime/redis-io.adapter.js';
+import { RpcProxyOnlyModule } from './rpc-proxy-only.module.js';
 
 /**
  * Production CORS allow-list. ONLY the public app + ops panel.
@@ -62,7 +64,85 @@ const DEV_ALLOWED_ORIGINS = [
   'http://localhost:5174',
 ];
 
+/**
+ * Slim bootstrap for the standalone RPC-proxy-only deployment
+ * (`RPC_PROXY_ONLY=true`). Builds the app from `RpcProxyOnlyModule` — NO
+ * TypeORM / Bull / Schedule / indexer / WS / metrics — so it runs as an
+ * isolated mainnet RPC proxy without ever touching Postgres or Redis.
+ *
+ * Applies the SAME security posture as the full boot (helmet + the pinned CORS
+ * allow-list + `127.0.0.1`-fronted listener) and the shared exception filter,
+ * but deliberately OMITS:
+ *   - the global whitelist `ValidationPipe` — the `POST /rpc` controller takes
+ *     an UNTYPED body (a JSON-RPC payload may be a single object or a batch
+ *     array with open-ended `params`) and validates it structurally in the
+ *     service; a whitelist pipe would strip / reject valid RPC fields.
+ *   - Swagger, the Redis WS adapter and the separate metrics app — none apply
+ *     to a stateless proxy.
+ */
+async function bootstrapProxyOnly() {
+  const app = await NestFactory.create<NestExpressApplication>(RpcProxyOnlyModule, {
+    logger: ['log', 'error', 'warn'],
+  });
+
+  // Back the controller's body cap with an Express json-parser memory bound so
+  // a huge payload can't be buffered into memory unbounded (Nest's default
+  // ~100KB would silently disagree with a raised RPC_PROXY_MAX_BODY_BYTES).
+  //
+  // Layering, outermost first:
+  //   1. The controller checks Content-Length against the EXACT cap and throws
+  //      a clean `PayloadTooLargeException` (→ 413) BEFORE reading the body. A
+  //      real client always sends Content-Length, so this is the path that
+  //      produces the proper 413 for an oversized request.
+  //   2. The parser limit below is the hard MEMORY bound for the pathological
+  //      chunked / no-Content-Length case the controller can't pre-check. A
+  //      body that trips the parser surfaces as a generic 500 via the shared
+  //      filter (which only special-cases `HttpException`); that's acceptable
+  //      for an abnormal client — the request is rejected and never reaches
+  //      upstream, and memory stays bounded.
+  // We set the parser bound generously above the cap so the controller's 413
+  // (1) owns the normal oversized case, while (2) still caps memory.
+  const maxBodyBytes = parseInt(process.env.RPC_PROXY_MAX_BODY_BYTES ?? '', 10);
+  if (Number.isFinite(maxBodyBytes) && maxBodyBytes > 0) {
+    app.useBodyParser('json', { limit: maxBodyBytes * 2 });
+  }
+
+  app.use(helmet());
+  const isProduction = process.env.NODE_ENV === 'production';
+  // `credentials: false` — `POST /rpc` is anonymous (no cookies / Authorization),
+  // so the proxy never needs CORS credentials. Origins stay pinned to the same
+  // allow-list as the full stack.
+  app.enableCors({
+    origin: isProduction ? PROD_ALLOWED_ORIGINS : DEV_ALLOWED_ORIGINS,
+    credentials: false,
+  });
+  // Shared filter for a consistent error envelope; NO global ValidationPipe
+  // (see doc comment above — it would mangle JSON-RPC batch bodies).
+  app.useGlobalFilters(new AllExceptionsFilter());
+
+  // Bind host: 0.0.0.0 inside the container so Docker port-mapping (which
+  // routes from the host's 127.0.0.1 → container) can reach the listener.
+  // Production locality comes from `127.0.0.1:<port>:<port>` in the compose
+  // file. Default PORT 3012 keeps it off the full backend's 3010.
+  const port = parseInt(process.env.PORT ?? '3012', 10);
+  const host = process.env.HOST ?? '0.0.0.0';
+  await app.listen(port, host);
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `Areal RPC proxy (proxy-only mode) listening on http://127.0.0.1:${port} (/rpc, /health)`,
+  );
+}
+
 async function bootstrap() {
+  // RPC-proxy-only branch: a lightweight, standalone Solana RPC proxy with no
+  // DB / indexer / keeper / WS. Build the slim app and RETURN before any of the
+  // full-stack wiring below runs.
+  if (process.env.RPC_PROXY_ONLY === 'true') {
+    await bootstrapProxyOnly();
+    return;
+  }
+
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'error', 'warn', 'debug', 'verbose'],
   });
