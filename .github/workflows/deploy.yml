@@ -98,33 +98,55 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup SSH
-        # Same key shape as app/.github/workflows/deploy.yml. The deployer
-        # user on Fornex has restricted sudoers for bootstrap-fornex.sh
-        # (Phase 25 §A).
+        # Direct access to the beget origin is FIREWALLED — the runner reaches it
+        # ONLY through the RU-VDS bastion (ProxyJump). Operator must set these
+        # repo secrets:
+        #   DEPLOY_SSH_KEY  / DEPLOY_HOST  / DEPLOY_USER   — beget target
+        #   DEPLOY_JUMP_KEY / DEPLOY_JUMP_HOST / DEPLOY_JUMP_USER — RU-VDS bastion
+        #   DEPLOY_KNOWN_HOSTS — host keys for BOTH the bastion AND the target
+        #     (ssh-keyscan each, concatenated).
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}"  > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_JUMP_KEY }}" > ~/.ssh/jump_key
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/jump_key
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CFG
+          Host deploy-jump
+            HostName ${{ secrets.DEPLOY_JUMP_HOST }}
+            User ${{ secrets.DEPLOY_JUMP_USER }}
+            IdentityFile ~/.ssh/jump_key
+            IdentitiesOnly yes
+          Host deploy-target
+            HostName ${{ secrets.DEPLOY_HOST }}
+            User ${{ secrets.DEPLOY_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            ProxyJump deploy-jump
+          CFG
+          chmod 600 ~/.ssh/config
 
       - name: Pull + rebuild + migrate on VPS
         env:
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_REF: ${{ github.event.inputs.ref || 'main' }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -se <<EOF
+          # Reaches beget via the RU-VDS bastion (ProxyJump, see ~/.ssh/config).
+          ssh -o BatchMode=yes deploy-target bash -se <<EOF
           set -euo pipefail
 
-          # Meta-repo path on the VPS (operator-set, see runbook §2).
-          META_DIR="/opt/areal/areal-meta"
+          # Meta-repo clone on beget (post Fornex->Beget migration). The old
+          # /opt/areal/areal-meta path no longer exists — this is the live one.
+          META_DIR="/opt/areal-devnet/areal.newera"
 
           # Pull meta-repo + bump backend submodule pointer to ${DEPLOY_REF}.
+          # sdk is updated too: the backend image builds @areal/sdk in-image from
+          # the sibling sdk/ + vendor/ (see backend/Dockerfile sdk-builder stage),
+          # so the SDK source must be present and in sync.
           cd "\$META_DIR"
           git fetch --all --tags --prune
-          git submodule update --init --recursive backend
-          (cd backend && git fetch origin "${DEPLOY_REF}" && git checkout "${DEPLOY_REF}" && git pull --ff-only)
+          git submodule update --init --recursive backend sdk
+          (cd backend && git fetch origin "${DEPLOY_REF}" && git checkout "${DEPLOY_REF}" && git pull --ff-only origin "${DEPLOY_REF}")
 
           # Re-run bootstrap (idempotent). --skip-build only on doc-only changes.
           sudo AREAL_BACKEND_REF="${DEPLOY_REF}" \\
