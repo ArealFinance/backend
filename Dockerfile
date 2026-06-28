@@ -28,6 +28,14 @@ COPY --from=builder --chown=areal:areal /workspace/backend/package.json ./
 # SDK + vendor live alongside so `file:../sdk` resolves at runtime.
 COPY --from=builder --chown=areal:areal /workspace/sdk ../sdk
 COPY --from=builder --chown=areal:areal /workspace/vendor ../vendor
+# The backend (ESM) imports @areal/sdk via a `file:../sdk` symlink in
+# node_modules. @areal/sdk's ESM dist (.mjs) imports @solana/web3.js /
+# @solana/spl-token / @arlex/client as EXTERNALS, and ESM resolves those from
+# the SDK's REAL path (/sdk) — not the backend's node_modules. So point
+# /sdk/node_modules at the backend's hoisted node_modules. (CJS used to resolve
+# these via the symlink's logical path; the SDK's move to ESM `import`
+# conditions broke that, crashing runtime with ERR_MODULE_NOT_FOUND.)
+RUN ln -s /app/node_modules /sdk/node_modules
 USER areal
 EXPOSE 3010
 CMD ["node", "dist/main.js"]
