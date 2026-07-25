@@ -6,10 +6,12 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { describe, expect, it } from 'vitest';
 
 import { RealIpThrottlerGuard } from './common/net/real-ip-throttler.guard.js';
+import { SolanaConnectionModule } from './common/solana/connection.module.js';
 import { ProxyHealthController } from './modules/rpc-proxy/proxy-health.controller.js';
 import { RpcProxyController } from './modules/rpc-proxy/rpc-proxy.controller.js';
 import { RpcProxyModule } from './modules/rpc-proxy/rpc-proxy.module.js';
 import { RpcProxyService } from './modules/rpc-proxy/rpc-proxy.service.js';
+import { UnstakeTicketsModule } from './modules/unstake-tickets/unstake-tickets.module.js';
 import { RpcProxyOnlyModule } from './rpc-proxy-only.module.js';
 
 /**
@@ -48,14 +50,16 @@ describe('RpcProxyOnlyModule (slim-boot composition)', () => {
   const controllers = (Reflect.getMetadata('controllers', RpcProxyOnlyModule) ?? []) as unknown[];
   const providers = (Reflect.getMetadata('providers', RpcProxyOnlyModule) ?? []) as unknown[];
 
-  it('imports ONLY the proxy stack (Config + Throttler + RpcProxyModule)', async () => {
+  it('imports the bounded proxy and ticket-read stack without heavy infrastructure', async () => {
     const importedModules = await Promise.all(imports.map(resolveImportedModule));
     expect(importedModules).toContain(ConfigModule);
     expect(importedModules).toContain(ThrottlerModule);
     expect(importedModules).toContain(RpcProxyModule);
-    // Exactly three imports — a new heavy module (TypeOrm / Bull / Schedule /
+    expect(importedModules).toContain(SolanaConnectionModule);
+    expect(importedModules).toContain(UnstakeTicketsModule);
+    // Exactly five imports — a new heavy module (TypeOrm / Bull / Schedule /
     // Indexer / Realtime / Markets / EarnKeeper) added here trips this.
-    expect(imports).toHaveLength(3);
+    expect(imports).toHaveLength(5);
   });
 
   it('does NOT pull any DB / Redis / scheduler / indexer module into the slim graph', async () => {

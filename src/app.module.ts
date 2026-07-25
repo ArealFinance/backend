@@ -33,6 +33,7 @@ import { ProjectionsModule } from './modules/projections/projections.module.js';
 import { RealtimeModule } from './modules/realtime/realtime.module.js';
 import { RpcProxyModule } from './modules/rpc-proxy/rpc-proxy.module.js';
 import { TransactionsModule } from './modules/transactions/transactions.module.js';
+import { UnstakeTicketsModule } from './modules/unstake-tickets/unstake-tickets.module.js';
 
 /**
  * Root application module.
@@ -122,6 +123,7 @@ import { TransactionsModule } from './modules/transactions/transactions.module.j
     // embed the Helius key client-side.
     RpcProxyModule,
     EarnSnapshotModule,
+    UnstakeTicketsModule,
     // Devnet-ONLY yield keeper — registered always so the cron exists, but
     // inert unless its five fail-closed gates pass (see EarnKeeperModule). Can
     // NEVER act on mainnet.
